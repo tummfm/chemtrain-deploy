@@ -1,6 +1,6 @@
 [submodule "chemtrain-dev"]
 	path = chemtrain-dev
-	url = https://github.com/tummfm/chemtrain-dev.git
+	url = git@github.com:tummfm/chemtrain-dev.git
 [submodule "chemutils"]
 	path = chemutils
 	url = git@gitlab.lrz.de:mfm/science/chemutils.git
