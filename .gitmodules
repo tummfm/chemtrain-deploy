@@ -1,0 +1,3 @@
+[submodule "chemtrain-dev"]
+	path = chemtrain-dev
+	url = https://github.com/tummfm/chemtrain-dev.git
