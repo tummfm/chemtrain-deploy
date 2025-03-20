@@ -6,7 +6,6 @@ import argparse
 if len(sys.argv) > 1:
     os.environ["CUDA_VISIBLE_DEVICES"] = sys.argv[1]
 
-
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.95"
 
 import jax
@@ -36,9 +35,25 @@ def get_default_config():
     parser.add_argument("--batch", type=int, default=50)
     args = parser.parse_args()
 
+    dataset = "ANI"
+    
+    scale_energy = 96.485 # eV -> kJ/mol
+    scale_pos = 0.1 # A -> nm
+    fractional = True
+    flip_forces = False
+    per_atom = False
+    shift_U = 0.0
+
+    match dataset:
+        case "ANI":
+            scale_energy *= 27.2114079527 # Ha -> eV
+            flip_forces = True # why flip forces?
+
     print(f"Run on device {args.device}")
+
     return OrderedDict(
         tag=args.tag,
+        dataset=dataset,
         model=OrderedDict(
             r_cutoff=0.5,
             edge_multiplier=1.15,
@@ -72,19 +87,30 @@ def get_default_config():
             U=1e-6,
             F=1e-2,
         ),
+        scaling=OrderedDict(
+            scale_energy=scale_energy,
+            scale_pos=scale_pos
+        ),
+        processing=OrderedDict(
+            fractional=fractional,
+            flip_forces=flip_forces,
+            per_atom=per_atom,
+            shift_U=shift_U
+        ),
     )
+
 
 def main():
 
     config = get_default_config()
     out_dir = train_utils.create_out_dir(config)
 
-    dataset = aluminum.get_dataset("/home/weilong/workspace/chemsim-lammps/datasets")
+    dataset = aluminum.get_dataset("/home/weilong/workspace/chemsim-lammps/datasets", config)
 
     displacement_fn, _ = space.periodic_general(box=dataset['training']['box'][0], fractional_coordinates=True)
 
     nbrs_init, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
-        dataset["training"], displacement_fn, None, 0.5, box_key="box", mask_key="mask",
+        dataset["training"], displacement_fn, None, config["model"]["r_cutoff"], box_key="box", mask_key="mask",
         format=partition.Sparse,
     )
 
@@ -131,14 +157,14 @@ def main():
     )
 
     train_utils.save_predictions(out_dir, f"preds_validation", predictions)
-    train_utils.plot_predictions(predictions, dataset["validation"], out_dir, f"preds_validation")
+    train_utils.plot_predictions(predictions, dataset["validation"], out_dir, f"preds_validation", config["processing"])
     train_utils.plot_convergence(trainer_fm, out_dir)
 
     # Directly export the model for later use in LAMMPS
 
     displacement_fn, _ = space.free()
     nbrs_init, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
-        dataset["training"], displacement_fn, 0.0, 0.5, mask_key="mask",
+        dataset["training"], displacement_fn, 0.0, config["model"]["r_cutoff"], mask_key="mask",
         format=partition.Sparse, fractional_coordinates=False, capacity_multiplier=2.0
     )
     export_template, _ = train_utils.define_model(
@@ -147,15 +173,9 @@ def main():
         displacement_fn=displacement_fn
     )
 
-    num_mpl_lookup = {
-        "NequIP": 4,
-        "MACE": 2,
-        "Allegro": 0
-    }
-
     class Model(exporter.Exporter):
 
-        r_cutoff = 5.0 # Cutoff in Angstrom
+        r_cutoff = config["model"]["r_cutoff"] * 10 # Cutoff in Angstrom
 
         graph_type = export_graphs.SimpleSparseNeighborList
         nbr_order = [1,2]

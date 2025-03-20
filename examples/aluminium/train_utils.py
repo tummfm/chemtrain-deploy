@@ -85,16 +85,6 @@ def define_model(config,
             positive_species=positive_species,
             **config["model"]["model_kwargs"]
         )
-    # TODO: merge qeq branch to enable AllegroQeq
-    # elif model_type == "AllegroQeq":
-    #     init_fn, gnn_energy_fn = allegroQeq.allegro_neighborlist_pp(
-    #         displacement_fn, config["model"]["r_cutoff"], n_species,
-    #         max_edges=max_edges, output_irreps="1x0e",
-    #         per_particle=per_particle,
-    #         avg_num_neighbors=avg_num_neighbors, mode="energy",
-    #         positive_species=positive_species,
-    #         **config["model"]["model_kwargs"]
-    #     )
     else:
         raise NotImplementedError(f"Model {model_type} not implemented.")
 
@@ -524,29 +514,42 @@ def plot_predictions_spice(predictions, reference_data, out_dir, name):
 """
 
 
-def plot_predictions(predictions, reference_data, out_dir, name):
+def plot_predictions(predictions, reference_data, out_dir, name, processing):
     
     # scaling factor to account for unit conversions
     scale_energy = 96.4853722 # [eV] -> [kJ/mol]
     scale_pos = 0.1  # [Å] -> [nm]
+    scale_force = scale_energy / scale_pos
+    
     
     # NOTE: predictions are of total energy and require scaling
     # reference data is already in per-atom energy
     num_atoms = onp.sum(reference_data["mask"], axis=1)
-    pred_U_per_atom = predictions["U"] / num_atoms
-    ref_U_per_atom = reference_data["U"]
+    pred_U = predictions["U"]
+    ref_U = reference_data["U"]
+    if not processing["per_atom"]:
+        pred_U -= processing["shift_U"]
+        ref_U -= processing["shift_U"]
+        ref_U /= num_atoms
 
+    pred_U = pred_U / num_atoms
+    if processing["per_atom"]:
+        pred_U -= processing["shift_U"]
+        ref_U -= processing["shift_U"]
+        
     # energies
-    mae_U = onp.mean(onp.abs(pred_U_per_atom - ref_U_per_atom) / scale_energy)
-    min_U = min(min(pred_U_per_atom), min(ref_U_per_atom)) / scale_energy
-    max_U = max(max(pred_U_per_atom), max(ref_U_per_atom)) / scale_energy
+    mae_U = onp.mean(onp.abs(pred_U - ref_U) / scale_energy)
+    rmse_U = onp.sqrt((((pred_U - ref_U) / scale_energy) ** 2).mean())
+    min_U = min(min(pred_U), min(ref_U)) / scale_energy
+    max_U = max(max(pred_U), max(ref_U)) / scale_energy
     line_U = onp.linspace(min_U, max_U)
 
     # forces
     mae_F = onp.mean(onp.abs(predictions['F'] - reference_data[
-        'F'])) / scale_energy * scale_pos
-    min_F = min(min(predictions["F"][::50].ravel()), min(reference_data["F"][::50].ravel())) / scale_energy * scale_pos
-    max_F = max(max(predictions["F"][::50].ravel()), max(reference_data["F"][::50].ravel())) / scale_energy * scale_pos
+        'F'])) / scale_force
+    rmse_F = onp.sqrt(((predictions['F'] - reference_data['F']) ** 2).mean()) / scale_force
+    min_F = min(min(predictions["F"][::50].ravel()), min(reference_data["F"][::50].ravel())) / scale_force
+    max_F = max(max(predictions["F"][::50].ravel()), max(reference_data["F"][::50].ravel())) / scale_force
     line_F = onp.linspace(min_F, max_F)
     
     # create figures
@@ -555,16 +558,16 @@ def plot_predictions(predictions, reference_data, out_dir, name):
 
     fig.suptitle("Predictions")
     
-    ax1.set_title(f"Energy (MAE: {mae_U * 1000:.1f} meV/atom)")
-    ax1.plot(ref_U_per_atom / scale_energy,
-             pred_U_per_atom / scale_energy, "*")    
+    ax1.set_title(f"Energy (MAE: {mae_U * 1000:.1f} / RMSE: {rmse_U * 1000:.1f} meV/atom)")
+    ax1.plot(ref_U / scale_energy,
+             pred_U / scale_energy, "*")    
     ax1.plot(line_U, line_U, "k--")
     ax1.set_xlabel("Ref. U [eV/atom]")
     ax1.set_ylabel("Pred. U [eV/atom]")
 
-    ax2.set_title(f"Force (MAE: {mae_F * 1000:.1f} meV/A)")
-    ax2.plot(reference_data['F'][::50].ravel() / scale_energy * scale_pos,
-             predictions['F'][::50].ravel() / scale_energy * scale_pos,
+    ax2.set_title(f"Force (MAE: {mae_F * 1000:.1f} / RMSE: {rmse_F * 1000:.1f} meV/A)")
+    ax2.plot(reference_data['F'][::50].ravel() / scale_force,
+             predictions['F'][::50].ravel() / scale_force,
              "*")
     ax2.plot(line_F, line_F, "k--")
     ax2.set_xlabel("Ref. F [eV/A]")
