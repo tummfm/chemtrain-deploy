@@ -29,7 +29,10 @@ from jax_md_mod import custom_partition
 from chemutils.models.nequip import nequip_neighborlist_pp
 from chemutils.models.mace import mace_neighborlist_pp
 from chemutils.models.allegro import allegro_neighborlist_pp
-# from chemutils.models import allegroQeq
+from chemutils.models.painn import painn_neighborlist_pp
+
+# from chemutils.models import import sys
+from jax_md_mod.model import neural_networks
 from chemutils.visualize import molecule
 
 
@@ -40,7 +43,8 @@ def define_model(config,
                  per_particle=False,
                  avg_num_neighbors=1.0,
                  positive_species=False,
-                 displacement_fn=None):
+                 displacement_fn=None,
+                 max_triplets=None):
     """Initializes a concrete model for a system given path to model parameters."""
 
     if displacement_fn is None:
@@ -85,16 +89,25 @@ def define_model(config,
             positive_species=positive_species,
             **config["model"]["model_kwargs"]
         )
-    # TODO: merge qeq branch to enable AllegroQeq
-    # elif model_type == "AllegroQeq":
-    #     init_fn, gnn_energy_fn = allegroQeq.allegro_neighborlist_pp(
-    #         displacement_fn, config["model"]["r_cutoff"], n_species,
-    #         max_edges=max_edges, output_irreps="1x0e",
-    #         per_particle=per_particle,
-    #         avg_num_neighbors=avg_num_neighbors, mode="energy",
-    #         positive_species=positive_species,
-    #         **config["model"]["model_kwargs"]
-    #     )
+    elif model_type == "PaiNN":
+        init_fn, gnn_energy_fn = painn_neighborlist_pp(
+            displacement_fn, config["model"]["r_cutoff"], n_species,
+            max_edges=max_edges,
+            per_particle=per_particle,
+            avg_num_neighbors=avg_num_neighbors,
+            positive_species=positive_species,
+            mode="energy",
+            **config["model"]["model_kwargs"]
+        )
+    
+    elif model_type == "DimeNetPP":
+        init_fn, gnn_energy_fn = neural_networks.dimenetpp_neighborlist(
+            displacement_fn, config["model"]["r_cutoff"], n_species=n_species,
+            max_edges=max_edges, max_triplets=max_triplets,
+            n_global=1, n_local=0,
+            **config["model"]["model_kwargs"]
+        )
+
     else:
         raise NotImplementedError(f"Model {model_type} not implemented.")
 
@@ -114,10 +127,15 @@ def define_model(config,
                 num_atoms = jnp.sum(dynamic_kwargs["mask"])
             else:
                 num_atoms = 1.0 # return total energy
-
-            return gnn_energy_fn(
-                energy_params, pos, neighbor, **dynamic_kwargs
-            )
+            if config["model"]["type"] == "DimeNetPP":
+                energy = gnn_energy_fn(
+                    energy_params, pos, neighbor, **dynamic_kwargs
+                ).squeeze() # test with squeeze
+                return energy
+            else:
+                return gnn_energy_fn(
+                    energy_params, pos, neighbor, **dynamic_kwargs
+                )
 
         return energy_fn
 
@@ -127,7 +145,8 @@ def define_model(config,
     # Set up NN model
     r_init = jnp.asarray(dataset['training']['R'][0])
     # species_init = jnp.asarray(dataset['training']['species'][0])
-    species_init = jnp.zeros(dataset['training']['R'].shape[1], dtype=int)
+    species_init = jnp.asarray(dataset['training']['species'][0])
+    # species_init = jnp.zeros(dataset['training']['R'].shape[1], dtype=int)
     box_init = jnp.asarray(dataset['training']['box'][0])
     # mask_init = jnp.asarray(dataset['training']['mask'][0])
 
@@ -151,6 +170,7 @@ def define_model(config,
 
     # print(f"Init params: {init_params}")
     print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init, species=species_init)}")
+    # print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init)}")
     # print(f"Initial forces are {jax.jit(jax.grad(energy_fn_template(init_params)))(r_init, nbrs_init, mask=mask_init, species=species_init)}")
 
     return energy_fn_template, init_params
