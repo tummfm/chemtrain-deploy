@@ -31,8 +31,8 @@ def get_default_config():
     parser = argparse.ArgumentParser()
     parser.add_argument("device", type=str, default="-1")
     parser.add_argument("tag", type=str, default=None)
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch", type=int, default=50)
+    parser.add_argument("--epochs", type=int, default=150)
+    parser.add_argument("--batch", type=int, default=64)
     args = parser.parse_args()
 
     dataset = "ANI"
@@ -66,12 +66,26 @@ def get_default_config():
                 mlp_n_hidden=64,
                 embed_n_hidden=(8, 16, 32),
             ),
+            # type="MACE",
+            # model_kwargs=OrderedDict(
+            #     hidden_irreps="32x0e + 32x1o",
+            #     embed_dim=64,
+            #     max_ell=2,
+            #     num_interactions=2,
+            #     correlation=3,
+            # ),
+            # type="PaiNN",
+            # model_kwargs=OrderedDict(
+            #     hidden_size=128,
+            #     n_layers=4,
+            # ),
         ),
         optimizer=OrderedDict(
             # init_lr=1e-3,
-            init_lr=1e-2,
-            # lr_decay=5e-2,
-            lr_decay=0.1,
+            # init_lr=1e-4, # painn use 1e-4, otherwise 1e-2
+            init_lr=1e-2, # painn use 1e-4, otherwise 1e-2
+            lr_decay=1e-05,
+            # lr_decay=0.1,
             epochs=args.epochs,
             batch=args.batch,
             cache=25,
@@ -178,7 +192,12 @@ def main():
         r_cutoff = config["model"]["r_cutoff"] * 10 # Cutoff in Angstrom
 
         graph_type = export_graphs.SimpleSparseNeighborList
-        nbr_order = [1,2]
+        if config["model"]["type"] == "Allegro":
+            nbr_order = [1, 2]
+        if config["model"]["type"] == "MACE":
+            nbr_order = [3, 6]
+        if config["model"]["type"] == "PaiNN":
+            nbr_order = [5, 10]
         mask = False
         unit_style = "metal"
 

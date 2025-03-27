@@ -29,7 +29,7 @@ from jax_md_mod import custom_partition
 from chemutils.models.nequip import nequip_neighborlist_pp
 from chemutils.models.mace import mace_neighborlist_pp
 from chemutils.models.allegro import allegro_neighborlist_pp
-# from chemutils.models import allegroQeq
+from chemutils.models.painn import painn_neighborlist_pp
 from chemutils.visualize import molecule
 
 
@@ -83,6 +83,16 @@ def define_model(config,
             per_particle=per_particle,
             avg_num_neighbors=avg_num_neighbors, mode="energy",
             positive_species=positive_species,
+            **config["model"]["model_kwargs"]
+        )
+    elif model_type == "PaiNN":
+        init_fn, gnn_energy_fn = painn_neighborlist_pp(
+            displacement_fn, config["model"]["r_cutoff"], n_species,
+            max_edges=max_edges,
+            per_particle=per_particle,
+            avg_num_neighbors=avg_num_neighbors,
+            positive_species=positive_species,
+            mode="energy",
             **config["model"]["model_kwargs"]
         )
     else:
