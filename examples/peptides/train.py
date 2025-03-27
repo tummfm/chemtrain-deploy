@@ -1,80 +1,34 @@
 import os
-import functools
 import sys
-
 import argparse
-
-from pathlib import Path
-
-#import mlflow
-import tomli_w
-from jax.experimental.custom_partitioning import custom_partitioning
-
 if len(sys.argv) > 1:
     os.environ["CUDA_VISIBLE_DEVICES"] = sys.argv[1]
-
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.95"
 
 import jax
 # jax.config.update("jax_debug_nans", True)
-
-import numpy as onp
-
 import jax
-from jax import tree_util, lax, random
 from chemtrain.deploy import exporter, graphs as export_graphs
-
-import jax.numpy as jnp
-
-from jax.sharding import PartitionSpec as P
-
-from jax_md_mod import io, custom_quantity, custom_space, custom_energy, custom_partition
-from jax_md import simulate, partition, space, util, energy, quantity as snapshot_quantity
-from jax.experimental import mesh_utils
-
-from jax_md_mod.model import layers, neural_networks, prior
-
-import mdtraj
-
-import optax
-
+from jax_md_mod import custom_space
+from jax_md import partition
 from collections import OrderedDict
-
-
-import matplotlib.pyplot as plt
-
-import haiku as hk
-import chex
-import copy
-import contextlib
-
-from chemtrain.data import preprocessing, graphs
-from chemtrain.ensemble import sampling
-from chemtrain import quantity, trainers, util as chem_util
-from chemtrain.trainers import ForceMatching, extensions
-from chemtrain.quantity import property_prediction
-
-import e3nn_jax
-
+from chemtrain.data import graphs
+from chemtrain import trainers
 from chemutils.datasets import spice
-from chemutils.datasets import utils as data_utils
-
 import train_utils
 
 
 def get_default_config():
     parser = argparse.ArgumentParser()
     parser.add_argument("device", type=str, default="-1")
-    parser.add_argument("tag", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch", type=int, default=32)
+    parser.add_argument("--batch", type=int, default=256)
     parser.add_argument("--seed", type=int, default=11)
     args = parser.parse_args()
 
     print(f"Run on device {args.device}")
     return OrderedDict(
-        tag=args.tag,
         seed=args.seed,
         model=OrderedDict(
             r_cutoff=0.5,
@@ -93,17 +47,27 @@ def get_default_config():
             # model_kwargs=OrderedDict(
             #     # hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o + 4x3e + 4x3o",
             #     hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o + 4x3e + 4x3o",
+            #     # hidden_irreps="64x0e + 32x1e + 32x1o + 16x2e + 16x2o + 8x3e + 8x3o",
             #     embed_dim=128,
             #     max_ell=3,
             #     num_layers=2,
+            #     mlp_n_hidden=64,
+            #     embed_n_hidden=(8, 16, 32),
+            # ),
+            # type="PaiNN",
+            # model_kwargs=OrderedDict(
+            #     hidden_size=128,
+            #     n_layers=4,
             # ),
         ),
         optimizer=OrderedDict(
-            init_lr=1e-2,
-            lr_decay=1e-2,
+            init_lr=8.00E-03, # mace and allegro
+            # init_lr=1.00E-04, # painn
+            lr_decay=1.00E-01,
             epochs=args.epochs,
             batch=args.batch,
-            cache=25,
+            cache=50,
+            power=2,
             weight_decay=1e-4,
             type="ADAM",
             optimizer_kwargs=OrderedDict(
@@ -117,10 +81,12 @@ def get_default_config():
                 "SPICE PubChem Set",  # Regex matching the subset names
                 "Amino Acid Ligand",
                 "SPICE Dipeptides",
-                "DES370K"
+                "DES370K",
+                "SPICE Solvated",
+                "SPICE Water"
             ],
             # subsets=[".*"],
-            max_samples=10000 # Use all samples if commented out
+            # max_samples=10000 # Use all samples if commented out
         ),
         gammas=OrderedDict(
             U=1e-6,
@@ -155,7 +121,7 @@ def main():
 
     displacement_fn, _ = custom_space.nonperiodic_general(fractional_coordinates=False)
     nbrs_init, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
-        dataset["training"], displacement_fn, 0.0, 0.5, mask_key="mask",
+        dataset["training"], displacement_fn, 0.0, config["model"]["r_cutoff"], mask_key="mask",
         format=partition.Sparse,
     )
 
@@ -217,20 +183,19 @@ def main():
         displacement_fn=displacement_fn
     )
 
-    num_mpl_lookup = {
-        "NequIP": 4,
-        "MACE": 2,
-        "Allegro": 0
-    }
 
     class Model(exporter.Exporter):
 
         graph_type = export_graphs.SimpleSparseNeighborList
 
-        num_mpl: int = num_mpl_lookup[config["model"]["type"]]
-
-        r_cutoff = 5.0 # Cutoff in angstrom
-
+        r_cutoff = config["model"]["r_cutoff"] * 10 # Cutoff in angstrom
+        if config["model"]["type"] == "Allegro":
+            nbr_order = [1, 2]
+        if config["model"]["type"] == "MACE":
+            nbr_order = [3, 6]
+        if config["model"]["type"] == "PaiNN":
+            nbr_order = [5, 10]
+    
         def __init__(self, export_template, params, *args, **kwargs):
             self.model = export_template(params)
 

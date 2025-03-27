@@ -42,9 +42,8 @@ from jax_md import energy
 from chemutils.models.nequip import nequip_neighborlist_pp
 from chemutils.models.mace import mace_neighborlist_pp
 from chemutils.models.allegro import allegro_neighborlist_pp
-#from chemutils.models import allegroQeq
+from chemutils.models.painn import painn_neighborlist_pp
 from chemutils.visualize import molecule
-from matplotlib.pyplot import legend
 from cycler import cycler
 
 
@@ -55,7 +54,9 @@ def define_model(config,
                  per_particle=False,
                  avg_num_neighbors=1.0,
                  positive_species=False,
-                 displacement_fn=None):
+                 displacement_fn=None,
+                 species=None,
+                 **kwargs):
     """Initializes a concrete model for a system given path to model parameters."""
 
     if displacement_fn is None:
@@ -94,15 +95,16 @@ def define_model(config,
             positive_species=positive_species,
             **config["model"]["model_kwargs"]
         )
-    # elif model_type == "AllegroQeq":
-    #     init_fn, gnn_energy_fn = allegroQeq.allegro_neighborlist_pp(
-    #         displacement_fn, config["model"]["r_cutoff"], n_species,
-    #         max_edges=max_edges, output_irreps="1x0e",
-    #         per_particle=per_particle,
-    #         avg_num_neighbors=avg_num_neighbors, mode="energy",
-    #         positive_species=positive_species,
-    #         **config["model"]["model_kwargs"]
-    #     )
+    elif model_type == "PaiNN":
+        init_fn, gnn_energy_fn = painn_neighborlist_pp(
+            displacement_fn, config["model"]["r_cutoff"], n_species,
+            max_edges=max_edges,
+            per_particle=per_particle,
+            avg_num_neighbors=avg_num_neighbors,
+            positive_species=positive_species,
+            mode="energy",
+            **config["model"]["model_kwargs"]
+        )
     else:
         raise NotImplementedError(f"Model {model_type} not implemented.")
 
@@ -292,10 +294,16 @@ def init_optimizer(config, dataset):
     #     0.33,
     #     transition_steps,
     # )
-    lr_schedule_fm = optax.exponential_decay(
+    # lr_schedule_fm = optax.exponential_decay(
+    #     config["optimizer"]["init_lr"],
+    #     transition_steps,
+    #     config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
+    # )
+    lr_schedule_fm = optax.polynomial_schedule(
         config["optimizer"]["init_lr"],
-        transition_steps,
         config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
+        config["optimizer"]["power"],
+        transition_steps,
     )
 
 
@@ -521,6 +529,7 @@ def plot_predictions(predictions, reference_data, subsets, out_dir, name, run_id
     ref_u_per_a = reference_data['U'] / onp.sum(reference_data['mask'], axis=1) / scale_energy
 
     mae = onp.mean(onp.abs(pred_u_per_a - ref_u_per_a))
+    print(f'Energy MEA: {mae * 1000:.1f} meV/atom')
     ax1.set_title(f"Energy (MAE: {mae * 1000:.1f} meV/atom)")
     ax1.set_prop_cycle(cycler(color=plt.get_cmap('tab20c').colors))
     for subset, label in subsets.items():
@@ -537,6 +546,7 @@ def plot_predictions(predictions, reference_data, subsets, out_dir, name, run_id
 
     mae = onp.mean(onp.abs(pred_F - ref_F))
     ax2.set_title(f"Force (MAE: {mae * 1000:.1f} meV/A)")
+    print(f'Force MEA: {mae * 1000:.1f} meV/A')
     ax2.set_prop_cycle(cycler(color=plt.get_cmap('tab20c').colors))
     for subset, label in subsets.items():
         mask = subs == subset
