@@ -82,7 +82,7 @@ def get_default_config():
             init_lr=1e-4, # original 1e-3
             # init_lr=1e-2,
             # lr_decay=5e-2,
-            lr_decay=0.1,
+            lr_decay=1e-05,
             epochs=args.epochs,
             batch=args.batch,
             cache=25,

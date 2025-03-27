@@ -63,7 +63,7 @@ def get_default_config():
         optimizer=OrderedDict(
             init_lr=8.00E-03, # mace and allegro
             # init_lr=1.00E-04, # painn
-            lr_decay=1.00E-01,
+            lr_decay=1.00E-5,
             epochs=args.epochs,
             batch=args.batch,
             cache=50,
