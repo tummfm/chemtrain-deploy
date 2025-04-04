@@ -22,7 +22,7 @@ import train_utils
 def get_default_config():
     parser = argparse.ArgumentParser()
     parser.add_argument("device", type=str, default="-1")
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch", type=int, default=256)
     parser.add_argument("--seed", type=int, default=11)
     args = parser.parse_args()
@@ -33,42 +33,41 @@ def get_default_config():
         model=OrderedDict(
             r_cutoff=0.5,
             edge_multiplier=1.15,
-            type="MACE",
-            model_kwargs=OrderedDict(
-                hidden_irreps="32x0e + 32x1o",
-                # hidden_irreps="128x0e + 128x1o",
-                embed_dim=64,
-                max_ell=2,
-                num_interactions=2,
-                correlation=3,
-            ),
-
-            # type="Allegro",
+            # type="MACE",
             # model_kwargs=OrderedDict(
-            #     # hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o + 4x3e + 4x3o",
-            #     hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o + 4x3e + 4x3o",
-            #     # hidden_irreps="64x0e + 32x1e + 32x1o + 16x2e + 16x2o + 8x3e + 8x3o",
-            #     embed_dim=128,
-            #     max_ell=3,
-            #     num_layers=2,
-            #     mlp_n_hidden=64,
-            #     embed_n_hidden=(8, 16, 32),
+            #     hidden_irreps="32x0e + 32x1o",
+            #     # hidden_irreps="128x0e + 128x1o",
+            #     embed_dim=64,
+            #     max_ell=2,
+            #     num_interactions=2,
+            #     correlation=3,
             # ),
+
+            type="Allegro",
+            model_kwargs=OrderedDict(
+                # hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o + 4x3e + 4x3o",
+                hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o + 4x3e + 4x3o",
+                # hidden_irreps="64x0e + 32x1e + 32x1o + 16x2e + 16x2o + 8x3e + 8x3o",
+                embed_dim=64, # 128
+                num_layers=2,
+                mlp_n_hidden=64,
+                # embed_n_hidden=(8, 16, 32),
+            ),
             # type="PaiNN",
             # model_kwargs=OrderedDict(
-            #     hidden_size=128,
+            #     hidden_size=192,
             #     n_layers=4,
             # ),
         ),
         optimizer=OrderedDict(
-            init_lr=8.00E-03, # mace and allegro
-            # init_lr=1.00E-04, # painn
+            # init_lr=8.00E-03, # mace and allegro
+            init_lr=1.00E-04, # painn
             lr_decay=1.00E-5,
             epochs=args.epochs,
             batch=args.batch,
             cache=50,
-            power=2,
-            weight_decay=1e-4,
+            power=0.33,
+            # weight_decay=1e-4,
             type="ADAM",
             optimizer_kwargs=OrderedDict(
                 b1=0.9,
