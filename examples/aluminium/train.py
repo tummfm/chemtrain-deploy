@@ -57,15 +57,15 @@ def get_default_config():
         model=OrderedDict(
             r_cutoff=0.5,
             edge_multiplier=1.15,
-            type="Allegro",
-            model_kwargs=OrderedDict(
-                hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o",
-                embed_dim=32,
-                max_ell=2,
-                num_layers=1,
-                mlp_n_hidden=64,
-                embed_n_hidden=(8, 16, 32),
-            ),
+            # type="Allegro",
+            # model_kwargs=OrderedDict(
+            #     hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o",
+            #     embed_dim=32,
+            #     max_ell=2,
+            #     num_layers=1,
+            #     mlp_n_hidden=64,
+            #     embed_n_hidden=(8, 16, 32),
+            # ),
             # type="MACE",
             # model_kwargs=OrderedDict(
             #     hidden_irreps="32x0e + 32x1o",
@@ -74,16 +74,17 @@ def get_default_config():
             #     num_interactions=2,
             #     correlation=3,
             # ),
-            # type="PaiNN",
-            # model_kwargs=OrderedDict(
-            #     hidden_size=128,
-            #     n_layers=4,
-            # ),
+            type="PaiNN",
+            model_kwargs=OrderedDict(
+                # hidden_size=256, 
+                hidden_size=196,
+                n_layers=4,
+            ),
         ),
         optimizer=OrderedDict(
             # init_lr=1e-3,
-            # init_lr=1e-4, # painn use 1e-4, otherwise 1e-2
-            init_lr=1e-2, # painn use 1e-4, otherwise 1e-2
+            init_lr=1e-3, # painn use 1e-3, otherwise 1e-2
+            # init_lr=1e-2, # painn use 1e-4, otherwise 1e-2
             lr_decay=1e-05,
             # lr_decay=0.1,
             epochs=args.epochs,
