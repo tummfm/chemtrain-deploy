@@ -10,8 +10,8 @@ neigh_modify 	every 10 delay 0 check yes
 # neigh_modify    one 100000
 # neigh_modify    page 1000000
 
-# Has to be r_cut * (#MPL + 1) + skin_dist = 25 + 2.5
-comm_modify 	mode single cutoff 27.5
+# Has to be r_cut * (#MPL + 1) + skin_dist = 15 + 2.5
+comm_modify 	mode single cutoff 17.5
 newton      on
 
 read_data       alanine_solvated.lmpdat
@@ -25,7 +25,7 @@ mass 		7 14.0067
 mass 		8 15.999
 
 pair_style  jaxnn cuda12 0.95
-pair_coeff	* * /home/weilong/workspace/chemsim-lammps/examples/peptides/output/SPICE_PaiNN_2025_3_28_e91d216a-d929-4584-be5f-92e6e572bfea/model.ptb 1.1 1.1
+pair_coeff	* * /home/weilong/workspace/chemsim-lammps/examples/peptides/output/SPICE_MACE_2025_3_28_4ead32c0-7fdc-497f-8e46-3d6d42b46e38/model.ptb 1.1 1.1
 
 # 4) Visualization
 thermo 10
@@ -48,7 +48,8 @@ timestep 	1.0
 # Log data
 thermo 		1000
 thermo_style 	custom step pe ke etotal temp vol
-dump 		1 all custom 100 alanine_solvated_painn.lammpstrj id type x y z
+dump 		1 all custom 100 alanine_solvated_mace.lammpstrj id type x y z
 
-run 		10000000 # 10000 # 100000
+run 		100000 # 10000 # 100000
+write_data final_config.data
 
