@@ -34,8 +34,8 @@ def get_default_config():
     parser = argparse.ArgumentParser()
     parser.add_argument("device", type=str, default="-1")
     parser.add_argument("tag", type=str, default=None)
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch", type=int, default=128) # original 64
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--batch", type=int, default=64) # original 64
     args = parser.parse_args()
 
     print(f"Run on device {args.device}")
@@ -74,7 +74,8 @@ def get_default_config():
             # ),
             type="PaiNN",
             model_kwargs=OrderedDict(
-                hidden_size=128,
+                # hidden_size=128,
+                hidden_size=192,
                 n_layers=4,
             ),
         ),
@@ -106,7 +107,7 @@ def main():
     out_dir = train_utils.create_out_dir(config)
 
     dataset = water.get_dataset("/home/weilong/workspace/chemsim-lammps/datasets")
-    dataset = water.get_random_subset(dataset, 0.5, seed=0)
+    dataset = water.get_random_subset(dataset, 1.0, seed=0)
     displacement_fn, _ = space.periodic_general(box=dataset['training']['box'][0], fractional_coordinates=True)
     if config["model"]["type"] == "DimeNetPP":
         nbrs_format = partition.Dense
