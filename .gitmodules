@@ -1,6 +1,7 @@
-[submodule "chemtrain-dev"]
-	path = chemtrain-dev
-	url = git@github.com:tummfm/chemtrain-dev.git
 [submodule "chemutils"]
-	path = chemutils
+	path = external/chemutils
 	url = git@gitlab.lrz.de:mfm/science/chemutils.git
+[submodule "chemtrain"]
+	path = external/chemtrain
+	url = git@github.com:tummfm/chemtrain-dev.git
+	branch = LAMMPS
