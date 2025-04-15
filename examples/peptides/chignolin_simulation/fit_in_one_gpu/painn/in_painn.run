@@ -1,0 +1,54 @@
+# input script for simulation of alanine dipeptide
+
+dimension   3
+units		real
+boundary 	p p p
+atom_style 	atomic
+
+neighbor 	2.5 bin
+neigh_modify 	every 10 delay 0 check yes
+# neigh_modify    one 100000
+# neigh_modify    page 1000000
+
+# Has to be r_cut * (#MPL + 1) + skin_dist = 25 + 2.5
+comm_modify 	mode single cutoff 27.5
+newton      on
+
+read_data       /home/weilong/workspace/chemsim-lammps/examples/alan_simulation/fit_in_one_gpu/chignolin_solvated_7.lmpdat
+mass 		1 1.008
+mass        	2  1.0
+mass        	3  6.941
+mass        	4  1.0
+mass        	5 10.81
+mass 		6 12.011
+mass 		7 14.0067
+mass 		8 15.999
+
+pair_style  jaxnn cuda12 0.95
+pair_coeff	* * /home/weilong/workspace/chemsim-lammps/examples/peptides/output/SPICE_PaiNN_2025_3_28_e91d216a-d929-4584-be5f-92e6e572bfea/model.ptb 1.1 1.1
+
+# 4) Visualization
+thermo 10
+thermo_style custom step temp pe ke etotal press
+#
+# # 5) Run
+# minimize 1.0e-4 1.0e-6 1000 10000
+
+velocity 	all create 298.17 23456789
+
+# If this actually is in fs^-1, then it should be this high.
+# GROMACS recommends friction around 0.5/ps
+# fix         1 all nve
+# fix         2 all langevin 300.0 300.0 1000. 1530917
+
+fix 1 all nvt temp 300.0 300.0 100.0
+
+timestep 	1.0
+
+# Log data
+thermo 		10
+thermo_style 	custom step pe ke etotal temp vol
+dump 		1 all custom 100 alanine_solvated_painn.lammpstrj id type x y z
+
+run 		200 # 10000 # 100000
+
