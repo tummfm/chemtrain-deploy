@@ -118,12 +118,12 @@ def init_count_edges_fn(displacement_fn, r_cutoff):
 
     return count
 
-def init_simulator(step_fn, count_edges_fn, neighbor_fn: partition.NeighborListFunctions, steps_to_printout, printout_steps):
+def init_simulator(step_fn, count_edges_fn, neighbor_fn: partition.NeighborListFunctions, steps_to_printout, printout_steps, state_kwargs):
 
     def run_step(state, _):
         sim_state, nbrs = state
         nbrs = neighbor_fn.update(sim_state.position, neighbor=nbrs)
-        sim_state = step_fn(sim_state, nbrs)
+        sim_state = step_fn(sim_state, nbrs, **state_kwargs)
 
         # Count number of valid edges
 
@@ -214,10 +214,10 @@ def main():
 
 
     init_fn, step_fn = simulate.nvt_nose_hoover(...) # TODO: Initialize
-    simulator_fn = init_simulator(step_fn, count_edge_fn, neighbor_fn, steps_to_printout, printout_steps) # TODO: Set timings
+    simulator_fn = init_simulator(step_fn, count_edge_fn, neighbor_fn, steps_to_printout, printout_steps, state_kwargs={"species": init_sample["species"]}) # TODO: Set timings
 
     init_state = (
-        init_fn(init_sample["R"], mass=init_sample["mass"]), nbrs_init
+        init_fn(init_sample["R"], species=init_sample["species"], mass=init_sample["mass"]), nbrs_init
     )
 
     t_start = time.time()
