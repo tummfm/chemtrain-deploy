@@ -135,10 +135,11 @@ def init_simulator(step_fn, count_edges_fn, neighbor_fn: partition.NeighborListF
 
         return state, (sim_state, jnp.max(edges))
 
+    @jax.jit
     def run(state):
         state, (traj, edges) = jax.lax.scan(run_printout, state, jnp.arange(printout_steps))
 
-        return state, jnp.max(edges)
+        return state, traj, jnp.max(edges)
 
     return run
 
@@ -174,12 +175,19 @@ def main():
     displacement_fn, shift_fn = space.periodic_general(
         box_lengths, fractional_coordinates=True)
 
-    nbrs_init, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
+    _, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
         dataset, displacement_fn, None, config["model"]["r_cutoff"], box_key="box", mask_key=None,
-        format=partition.Sparse, capacity_multiplier=config["model"]["edge_multiplier"]
+        format=partition.Sparse, capacity_multiplier=config["model"]["edge_multiplier"],
+    )
+
+    neighbor_fn = partition.neighbor_list(
+        displacement_fn, init_sample["box"], config["model"]["r_cutoff"], dr_threshold=0.0, # TODO: Set threshold with config file
+        disable_cell_list=False, fractional_coordinates=True,
+        format=partition.Sparse,
     )
 
     max_edges = int(max_edges * config["model"]["edge_multiplier"])
+    nbrs_init = neighbor_fn.allocate(dataset["R"], capacity_multiplier=config["model"]["edge_multiplier"])
 
     print(f"Neighbors: {nbrs_init}")
     print(f"Max neighbors: {max_neighbors}, max edges: {max_edges}")
@@ -202,16 +210,28 @@ def main():
 
     # TODO: Initialize the simulator from above
 
+    count_edge_fn = init_count_edges_fn(displacement_fn, config["model"]["r_cutoff"])
+
+
+    init_fn, step_fn = simulate.nvt_nose_hoover(...) # TODO: Initialize
+    simulator_fn = init_simulator(step_fn, count_edge_fn, neighbor_fn, steps_to_printout, printout_steps) # TODO: Set timings
+
+    init_state = (
+        init_fn(init_sample["R"], mass=init_sample["mass"]), nbrs_init
+    )
 
     t_start = time.time()
-    traj_state = traj_generator(energy_params, reference_state)
+    (_, final_nbrs), traj, sim_max_edges = simulator_fn(init_state)
     t_end = time.time() - t_start
     print(f"Simulation time: {t_end / 60} min")
 
-    
-    trajectory = traj_state.trajectory.position
-    assert not traj_state.overflow, ('Neighborlist overflow during trajectory '
-                                    'generation. Increase capacity and re-run.')
+
+    # TODO: Check final neighbor list error code
+    final_nbrs.error
+
+    # TODO: Check whether simulations max edges remained below actual max edges
+    assert sim_max_edges <= max_edges, "Simulation exceeded max edges"
+
 if __name__ == "__main__":
     main()
 
