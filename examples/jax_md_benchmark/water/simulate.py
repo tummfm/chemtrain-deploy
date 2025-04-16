@@ -49,7 +49,7 @@ def get_default_config():
         tag=args.tag,
         model=OrderedDict(
             r_cutoff=0.50, # dimenet train 0.25
-            edge_multiplier=1.15,
+            edge_multiplier=1.25,
             # type="Allegro",
             # model_kwargs=OrderedDict(
             #     hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o",
@@ -107,59 +107,55 @@ def get_default_config():
         ),
     )
 
+
+def init_count_edges_fn(displacement_fn, r_cutoff):
+    metric = jax.vmap(space.metric(displacement_fn))
+
+    def count(position, neighbor):
+        senders, receivers = neighbor.idx
+        dists = metric(position[senders], position[receivers])
+        return jnp.sum(dists < r_cutoff)
+
+    return count
+
+def init_simulator(step_fn, count_edges_fn, neighbor_fn: partition.NeighborListFunctions, steps_to_printout, printout_steps):
+
+    def run_step(state, _):
+        sim_state, nbrs = state
+        nbrs = neighbor_fn.update(sim_state.position, neighbor=nbrs)
+        sim_state = step_fn(sim_state, nbrs)
+
+        # Count number of valid edges
+
+        return (sim_state, nbrs), count_edges_fn(sim_state.position, nbrs)
+
+    def run_printout(state, _):
+        state, edges = jax.lax.scan(run_step, state, jnp.arange(steps_to_printout))
+        sim_state, _ = state
+
+        return state, (sim_state, jnp.max(edges))
+
+    def run(state):
+        state, (traj, edges) = jax.lax.scan(run_printout, state, jnp.arange(printout_steps))
+
+        return state, jnp.max(edges)
+
+    return run
+
+
 def main():
 
     config = get_default_config()
     out_dir = train_utils.create_out_dir(config)
 
-    dataset = water.get_dataset("/home/weilong/workspace/chemsim-lammps/datasets")
-    dataset = water.get_random_subset(dataset, 1.0, seed=0)
-    displacement_fn, _ = space.periodic_general(box=dataset['training']['box'][0], fractional_coordinates=True)
-    if config["model"]["type"] == "DimeNetPP":
-        nbrs_format = partition.Dense
-        nbrs_init, (max_neighbors, max_edges, avg_num_neighbors, max_triplets) = graphs.allocate_neighborlist(
-            dataset["training"], displacement_fn, None, config["model"]["r_cutoff"], box_key="box", mask_key=None,
-            format=nbrs_format, count_triplets=True
-        )
-    else:
-        nbrs_init, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
-            dataset["training"], displacement_fn, None, config["model"]["r_cutoff"], box_key="box", mask_key=None,
-            format=partition.Sparse
-        )
+    atoms = read_lammps_data("final_config_filtered_13056_atoms.data",
+                             style='atomic')
 
-    print(f"Neighbors: {nbrs_init}")
-    print(f"Max neighbors: {max_neighbors}, max edges: {max_edges}")
-
-    # Positive species not required -> check again
-    if config["model"]["type"] == "DimeNetPP":
-        energy_fn_template, init_params = train_utils.define_model(
-            config, dataset, nbrs_init, max_edges, per_particle=False, # per_particle=False for trainig
-            avg_num_neighbors=avg_num_neighbors, positive_species=False,
-            displacement_fn=displacement_fn, max_triplets=max_triplets
-        ) 
-    else:
-        energy_fn_template, init_params = train_utils.define_model(
-            config, dataset, nbrs_init, max_edges, per_particle=False, # per_particle=False for trainig
-            avg_num_neighbors=avg_num_neighbors, positive_species=False,
-            displacement_fn=displacement_fn
-        )      
-    energy_params = onp.load(
-        "best_params.pkl",
-        allow_pickle=True,
-    )
-
-    energy_params = tree_util.tree_map(
-        jnp.asarray, energy_params
-    )
-    energy_fn = energy_fn_template(energy_params)
-
-    atoms = read_lammps_data("final_config_filtered_13056_atoms.data", style='atomic')
-    
-    positions = atoms.get_positions() / 10 # convert to nm
+    positions = atoms.get_positions() / 10  # convert to nm
     box = atoms.cell
     species = atoms.get_atomic_numbers()
     box_lengths = jnp.array([box[0, 0], box[1, 1], box[2, 2]]) / 10
-    R = jnp.array(positions)
+    R = jnp.array(positions) / box_lengths[None, :]
     species = jnp.array(species) - 1
 
     masses = jnp.zeros_like(species, dtype=jnp.float32)
@@ -173,17 +169,38 @@ def main():
         "mass": masses,
     }
 
-    fractional = True
+    dataset = {key: jnp.expand_dims(value, axis=0) for key, value in init_sample.items()}
+
     displacement_fn, shift_fn = space.periodic_general(
-    box_lengths, fractional_coordinates=fractional)
+        box_lengths, fractional_coordinates=True)
 
-    neighbor_fn = partition.neighbor_list(
-        displacement_fn, box_lengths, config["model"]["r_cutoff"], dr_threshold=0.01, capacity_multiplier=5.0)
-    nbrs_init = neighbor_fn.allocate(init_sample["R"])
-
-    reference_state, traj_generator = train_utils.init_simulator(
-        init_sample, energy_fn, nbrs_init
+    nbrs_init, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
+        dataset, displacement_fn, None, config["model"]["r_cutoff"], box_key="box", mask_key=None,
+        format=partition.Sparse, capacity_multiplier=config["model"]["edge_multiplier"]
     )
+
+    max_edges = int(max_edges * config["model"]["edge_multiplier"])
+
+    print(f"Neighbors: {nbrs_init}")
+    print(f"Max neighbors: {max_neighbors}, max edges: {max_edges}")
+
+    # Positive species not required -> check again
+    energy_fn_template, init_params = train_utils.define_model(
+        config, dataset, nbrs_init, max_edges, per_particle=False, # per_particle=False for trainig
+        avg_num_neighbors=avg_num_neighbors, positive_species=False,
+        displacement_fn=displacement_fn
+    )
+    energy_params = onp.load(
+        "best_params.pkl",
+        allow_pickle=True,
+    )
+
+    energy_params = tree_util.tree_map(
+        jnp.asarray, energy_params
+    )
+    energy_fn = energy_fn_template(energy_params)
+
+    # TODO: Initialize the simulator from above
 
 
     t_start = time.time()
