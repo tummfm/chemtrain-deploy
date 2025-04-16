@@ -2,6 +2,7 @@ import os
 import sys
 
 import argparse
+import time
 
 if len(sys.argv) > 1:
     os.environ["CUDA_VISIBLE_DEVICES"] = sys.argv[1]
@@ -165,29 +166,35 @@ def main():
     masses = jnp.where(species == 0, 15.9994, masses)
     masses = jnp.where(species == 1, 1.008, masses)
 
-
     init_sample = {
         "R": R,
         "box": box_lengths,
         "species": species,
         "mass": masses,
+    }
 
-    } 
     fractional = True
     displacement_fn, shift_fn = space.periodic_general(
     box_lengths, fractional_coordinates=fractional)
 
     neighbor_fn = partition.neighbor_list(
-        displacement_fn, box_lengths, config["model"]["r_cutoff"], dr_threshold=0.01)
+        displacement_fn, box_lengths, config["model"]["r_cutoff"], dr_threshold=0.01, capacity_multiplier=5.0)
     nbrs_init = neighbor_fn.allocate(init_sample["R"])
 
     reference_state, traj_generator = train_utils.init_simulator(
         init_sample, energy_fn, nbrs_init
     )
-    traj_state = traj_generator(None, reference_state)
+
+
+    t_start = time.time()
+    traj_state = traj_generator(energy_params, reference_state)
+    t_end = time.time() - t_start
+    print(f"Simulation time: {t_end / 60} min")
+
+    
     trajectory = traj_state.trajectory.position
-
-
+    assert not traj_state.overflow, ('Neighborlist overflow during trajectory '
+                                    'generation. Increase capacity and re-run.')
 if __name__ == "__main__":
     main()
 
