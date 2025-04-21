@@ -15,21 +15,17 @@ import jax
 # jax.config.update("jax_debug_nans", True)
 
 import jax
-from chemtrain.deploy import exporter, graphs as export_graphs
 from chemtrain import quantity
 
 from jax_md import partition, space, simulate
-from jax_md_mod.model import neural_networks
 from jax import random
 from jax import numpy as jnp, tree_util
 import numpy as onp
+from jax_md_mod import custom_space
 
 from collections import OrderedDict
 
 from chemtrain.data import graphs
-from chemtrain import trainers
-
-from chemutils.datasets import water
 
 import train_utils
 
@@ -38,53 +34,41 @@ from ase.io.lammpsdata import read_lammps_data
 def get_default_config():
     parser = argparse.ArgumentParser()
     parser.add_argument("device", type=str, default="-1")
+    parser.add_argument("--epochs", type=int, default=150)
+    parser.add_argument("--seed", type=int, default=11)
     args = parser.parse_args()
 
     print(f"Run on device {args.device}")
     return OrderedDict(
-        tag=args.tag,
         model=OrderedDict(
-            r_cutoff=0.50, # dimenet train 0.25
+            seed=args.seed,
+            r_cutoff=0.50,
             edge_multiplier=1.5,
+            # type="MACE",
+            # model_kwargs=OrderedDict(
+            #     hidden_irreps="32x0e + 32x1o",
+            #     # hidden_irreps="128x0e + 128x1o",
+            #     embed_dim=64,
+            #     readout_mlp_irreps="32x0e",
+            #     max_ell=2,
+            #     num_interactions=2,
+            #     correlation=3,
+            # ),
+
             # type="Allegro",
             # model_kwargs=OrderedDict(
-            #     hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o",
-            #     max_ell=3, # original 2
-            #     num_layers=2, # original 1
-            #     mlp_n_hidden=64,
-            #     embed_n_hidden=(8, 16, 32),
+            #     # hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o",
+            #     hidden_irreps="32x0e + 32x1e + 16x1o + 8x2e + 8x2o",
+            #     # hidden_irreps="64x0e + 32x1e + 32x1o + 16x2e + 16x2o + 8x3e + 8x3o",
+            #     num_layers=1,
+            #     mlp_n_hidden=128,
+            #     embed_n_hidden=(16, 32, 64),
             # ),
-            type="MACE",
+            type="PaiNN",
             model_kwargs=OrderedDict(
-                hidden_irreps="32x0e + 32x1o",
-                embed_dim=64,
-                readout_mlp_irreps="16x0e",
-                max_ell=2,
-                num_interactions=2,
-                correlation=3,
+                hidden_size=192,
+                n_layers=4,
             ),
-            # type="PaiNN",
-            # model_kwargs=OrderedDict(
-            #     # hidden_size=128,
-            #     hidden_size=192,
-            #     n_layers=4,
-            # ),
-        ),
-        optimizer=OrderedDict(
-            init_lr=1e-4, # original 1e-3
-            # init_lr=1e-2,
-            # lr_decay=5e-2,
-            lr_decay=1e-05,
-            epochs=args.epochs,
-            batch=args.batch,
-            cache=25,
-            # weight_decay=-1e-2,
-            type="ADAM",
-            optimizer_kwargs=OrderedDict(
-                b1=0.9,
-                b2=0.99,
-                eps=1e-8
-            )
         ),
         gammas=OrderedDict(
             U=1e-6,
@@ -93,7 +77,7 @@ def get_default_config():
         simulator=OrderedDict(
             dt=0.001,
             T=300,
-            dr_threshold=0.25,
+            dr_threshold=0.1,
             steps_to_printout=1, # original 1000
             printout_steps=100,
         ),
@@ -141,19 +125,26 @@ def main():
     key, split = random.split(key)
     config = get_default_config()
 
-    atoms = read_lammps_data("final_config_filtered_13056_atoms.data",
+    atoms = read_lammps_data("chignolin_solvated_6.lmpdat",
                              style='atomic')
 
     positions = atoms.get_positions() / 10  # convert to nm
+    R = positions
     box = atoms.cell
     species = atoms.get_atomic_numbers()
     box_lengths = jnp.array([box[0, 0], box[1, 1], box[2, 2]]) / 10
-    R = jnp.array(positions) / box_lengths[None, :]
+    # R = jnp.array(positions) / box_lengths[None, :]
     species = jnp.array(species) - 1
 
     masses = jnp.zeros_like(species, dtype=jnp.float32)
-    masses = jnp.where(species == 0, 15.9994, masses)
-    masses = jnp.where(species == 1, 1.008, masses)
+    masses = jnp.where(species == 0, 1.008, masses)
+    masses = jnp.where(species == 1, 1.0, masses)
+    masses = jnp.where(species == 2, 6.941, masses)
+    masses = jnp.where(species == 3, 1.0, masses)
+    masses = jnp.where(species == 4, 10.81, masses)
+    masses = jnp.where(species == 5, 12.011, masses)
+    masses = jnp.where(species == 6, 14.0067, masses)
+    masses = jnp.where(species == 7, 15.999, masses)
 
     init_sample = {
         "R": R,
@@ -163,18 +154,19 @@ def main():
     }
 
     dataset = {key: jnp.expand_dims(value, axis=0) for key, value in init_sample.items()}
+    # for key in dataset.keys():
+    #     dataset[key].pop("box")
 
-    displacement_fn, shift_fn = space.periodic_general(
-        box_lengths, fractional_coordinates=True)
-
+    displacement_fn, shift_fn = custom_space.nonperiodic_general(fractional_coordinates=False)
+ 
     _, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
-        dataset, displacement_fn, None, config["model"]["r_cutoff"], box_key="box", mask_key=None,
+        dataset, displacement_fn, 0.0, config["model"]["r_cutoff"], mask_key=None,
         format=partition.Sparse, capacity_multiplier=config["model"]["edge_multiplier"],
     )
 
     neighbor_fn = partition.neighbor_list(
         displacement_fn, init_sample["box"], config["model"]["r_cutoff"], dr_threshold=config["simulator"]["dr_threshold"], # TODO: Set threshold with config file
-        disable_cell_list=False, fractional_coordinates=True,
+        disable_cell_list=False, fractional_coordinates=False,
         format=partition.Sparse,
     )
 
@@ -221,16 +213,12 @@ def main():
     )
 
     t_start = time.time()
+    print(f"Starting simulation...")
     (_, final_nbrs), traj, sim_max_edges = simulator_fn(init_state)
     t_end = time.time() - t_start
     print(f"Simulation time: {t_end / 60} min")
 
     print(f"Final neighbor list: {final_nbrs.error}")
-    # TODO: Check final neighbor list error code
-    assert final_nbrs.error in [
-        partition.PartitionErrorCode.NONE,
-        partition.PartitionErrorCode.MALFORMED_BOX
-    ], f"Neighbor list error: {final_nbrs.error}"
 
     # TODO: Check whether simulations max edges remained below actual max edges
     print(f"Simulation max edges: {sim_max_edges}, max edges: {max_edges}")

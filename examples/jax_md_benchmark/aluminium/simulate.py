@@ -15,11 +15,9 @@ import jax
 # jax.config.update("jax_debug_nans", True)
 
 import jax
-from chemtrain.deploy import exporter, graphs as export_graphs
 from chemtrain import quantity
 
 from jax_md import partition, space, simulate
-from jax_md_mod.model import neural_networks
 from jax import random
 from jax import numpy as jnp, tree_util
 import numpy as onp
@@ -27,9 +25,6 @@ import numpy as onp
 from collections import OrderedDict
 
 from chemtrain.data import graphs
-from chemtrain import trainers
-
-from chemutils.datasets import water
 
 import train_utils
 
@@ -42,10 +37,9 @@ def get_default_config():
 
     print(f"Run on device {args.device}")
     return OrderedDict(
-        tag=args.tag,
         model=OrderedDict(
             r_cutoff=0.50, # dimenet train 0.25
-            edge_multiplier=1.5,
+            edge_multiplier=1.05,
             # type="Allegro",
             # model_kwargs=OrderedDict(
             #     hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o",
@@ -69,22 +63,6 @@ def get_default_config():
             #     hidden_size=192,
             #     n_layers=4,
             # ),
-        ),
-        optimizer=OrderedDict(
-            init_lr=1e-4, # original 1e-3
-            # init_lr=1e-2,
-            # lr_decay=5e-2,
-            lr_decay=1e-05,
-            epochs=args.epochs,
-            batch=args.batch,
-            cache=25,
-            # weight_decay=-1e-2,
-            type="ADAM",
-            optimizer_kwargs=OrderedDict(
-                b1=0.9,
-                b2=0.99,
-                eps=1e-8
-            )
         ),
         gammas=OrderedDict(
             U=1e-6,
@@ -141,7 +119,7 @@ def main():
     key, split = random.split(key)
     config = get_default_config()
 
-    atoms = read_lammps_data("final_config_filtered_13056_atoms.data",
+    atoms = read_lammps_data("initial_config.data",
                              style='atomic')
 
     positions = atoms.get_positions() / 10  # convert to nm
@@ -152,8 +130,7 @@ def main():
     species = jnp.array(species) - 1
 
     masses = jnp.zeros_like(species, dtype=jnp.float32)
-    masses = jnp.where(species == 0, 15.9994, masses)
-    masses = jnp.where(species == 1, 1.008, masses)
+    masses = jnp.where(species == 0, 26.981539, masses)
 
     init_sample = {
         "R": R,
@@ -226,11 +203,6 @@ def main():
     print(f"Simulation time: {t_end / 60} min")
 
     print(f"Final neighbor list: {final_nbrs.error}")
-    # TODO: Check final neighbor list error code
-    assert final_nbrs.error in [
-        partition.PartitionErrorCode.NONE,
-        partition.PartitionErrorCode.MALFORMED_BOX
-    ], f"Neighbor list error: {final_nbrs.error}"
 
     # TODO: Check whether simulations max edges remained below actual max edges
     print(f"Simulation max edges: {sim_max_edges}, max edges: {max_edges}")

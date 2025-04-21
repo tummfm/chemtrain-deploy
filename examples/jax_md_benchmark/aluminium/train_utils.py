@@ -17,10 +17,8 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
 from jax_md import space
-from jax_md import simulate
 
 from jax_md_mod import custom_quantity, custom_simulate
-from chemtrain import quantity
 
 import optax
 
@@ -32,9 +30,6 @@ from chemutils.models.nequip import nequip_neighborlist_pp
 from chemutils.models.mace import mace_neighborlist_pp
 from chemutils.models.allegro import allegro_neighborlist_pp
 from chemutils.models.painn import painn_neighborlist_pp
-
-# from chemutils.models import import sys
-from jax_md_mod.model import neural_networks
 from chemutils.visualize import molecule
 
 
@@ -45,8 +40,7 @@ def define_model(config,
                  per_particle=False,
                  avg_num_neighbors=1.0,
                  positive_species=False,
-                 displacement_fn=None,
-                 max_triplets=None):
+                 displacement_fn=None):
     """Initializes a concrete model for a system given path to model parameters."""
 
     if displacement_fn is None:
@@ -61,7 +55,7 @@ def define_model(config,
 #             fractional_coordinates=False)
 
     # Requirement to capture all species in the dataset
-    n_species = 2 # water with oxygens and hydrogens
+    n_species = 1 # Al
 
     model_type = config["model"].get("type", "NequIP")
     print(f"Run model {model_type}")
@@ -101,15 +95,6 @@ def define_model(config,
             mode="energy",
             **config["model"]["model_kwargs"]
         )
-    
-    elif model_type == "DimeNetPP":
-        init_fn, gnn_energy_fn = neural_networks.dimenetpp_neighborlist(
-            displacement_fn, config["model"]["r_cutoff"], n_species=n_species,
-            max_edges=max_edges, max_triplets=max_triplets,
-            n_global=1, n_local=0,
-            **config["model"]["model_kwargs"]
-        )
-
     else:
         raise NotImplementedError(f"Model {model_type} not implemented.")
 
@@ -129,15 +114,10 @@ def define_model(config,
                 num_atoms = jnp.sum(dynamic_kwargs["mask"])
             else:
                 num_atoms = 1.0 # return total energy
-            if config["model"]["type"] == "DimeNetPP":
-                energy = gnn_energy_fn(
-                    energy_params, pos, neighbor, **dynamic_kwargs
-                ).squeeze() # test with squeeze
-                return energy
-            else:
-                return gnn_energy_fn(
-                    energy_params, pos, neighbor, **dynamic_kwargs
-                )
+
+            return gnn_energy_fn(
+                energy_params, pos, neighbor, **dynamic_kwargs
+            )
 
         return energy_fn
 
@@ -147,12 +127,11 @@ def define_model(config,
     # Set up NN model
     r_init = jnp.asarray(dataset['R'][0])
     # species_init = jnp.asarray(dataset['training']['species'][0])
-    species_init = jnp.asarray(dataset['species'][0])
-    # species_init = jnp.zeros(dataset['training']['R'].shape[1], dtype=int)
+    species_init = jnp.zeros(dataset['R'].shape[1], dtype=int)
     box_init = jnp.asarray(dataset['box'][0])
-    # mask_init = jnp.asarray(dataset['training']['mask'][0])
+    mask_init = jnp.asarray(dataset['mask'][0])
 
-    nbrs_init = nbrs_init.update(r_init, box=box_init) #mask=mask_init
+    nbrs_init = nbrs_init.update(r_init, box=box_init, mask=mask_init)
 
     key = random.PRNGKey(11)
 
@@ -167,15 +146,31 @@ def define_model(config,
     # Load a pretrained model
     init_params = init_fn(
         key, r_init, nbrs_init, box=box_init, species=species_init,
-        # mask=mask_init
+        mask=mask_init
     )
 
     # print(f"Init params: {init_params}")
-    print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init, species=species_init)}")
-    # print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init)}")
+    print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init, mask=mask_init, species=species_init)}")
     # print(f"Initial forces are {jax.jit(jax.grad(energy_fn_template(init_params)))(r_init, nbrs_init, mask=mask_init, species=species_init)}")
 
     return energy_fn_template, init_params
+
+
+def init_simulator(config, shift_fn):
+    """Initializes simulator for ReSOLV"""
+    sim_settings = config["simulator_settings"]
+    simulator_template = functools.partial(
+        custom_simulate.nvt_langevin_gsd, shift_fn=shift_fn,
+        dt=sim_settings["dt"], kT=sim_settings["kT"],
+        gamma=sim_settings["gamma"]
+    )
+
+    timings = sampling.process_printouts(
+        sim_settings["dt"], sim_settings["total_time"],
+        sim_settings["t_equilib"], sim_settings["print_every"]
+    )
+
+    return simulator_template, timings
 
 
 def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, energy_fn_template, init_params, mass_repartitioning=False):
@@ -293,10 +288,14 @@ def init_optimizer(config, dataset):
     lr_schedule_fm = optax.polynomial_schedule(
         config["optimizer"]["init_lr"],
         config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
-        0.33,
+        2.0,
         transition_steps,
     )
-
+    # lr_schedule_fm = optax.exponential_decay(
+    #     config["optimizer"]["init_lr"],
+    #     transition_steps,
+    #     config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
+    # )
     if config["optimizer"]["type"] == "ADAM":
         opt_transform = optax.scale_by_adam(
             b1=config["optimizer"]["optimizer_kwargs"]["b1"],
@@ -337,7 +336,7 @@ def create_out_dir(config):
     tag = config["tag"]
     if tag is None:
         tag = uuid.uuid4()
-    name = f"water_{model}_r_cutoff_{config['model']['r_cutoff']}_{now.year}_{now.month}_{now.day}_{tag}"
+    name = f"aluminum_{model}_r_cutoff_{config['model']['r_cutoff']}_{now.year}_{now.month}_{now.day}_{tag}"
 
     out_dir = Path("output") / name
     out_dir.mkdir(exist_ok=False, parents=True)
@@ -529,31 +528,42 @@ def plot_predictions_spice(predictions, reference_data, out_dir, name):
 """
 
 
-def plot_predictions(predictions, reference_data, out_dir, name):
+def plot_predictions(predictions, reference_data, out_dir, name, processing):
     
     # scaling factor to account for unit conversions
     scale_energy = 96.4853722 # [eV] -> [kJ/mol]
     scale_pos = 0.1  # [Å] -> [nm]
+    scale_force = scale_energy / scale_pos
+    
     
     # NOTE: predictions are of total energy and require scaling
     # reference data is already in per-atom energy
-    # num_atoms = onp.sum(reference_data["mask"], axis=1)
-    num_atoms = reference_data["F"].shape[1]
-    print(f"Number of atoms: {num_atoms}")
-    pred_U_per_atom = predictions["U"] / num_atoms
-    ref_U_per_atom = reference_data["U"] / num_atoms # not sure if I should compare num_atoms
+    num_atoms = onp.sum(reference_data["mask"], axis=1)
+    pred_U = predictions["U"]
+    ref_U = reference_data["U"]
+    if not processing["per_atom"]:
+        pred_U -= processing["shift_U"]
+        ref_U -= processing["shift_U"]
+        ref_U /= num_atoms
 
+    pred_U = pred_U / num_atoms
+    if processing["per_atom"]:
+        pred_U -= processing["shift_U"]
+        ref_U -= processing["shift_U"]
+        
     # energies
-    mae_U = onp.mean(onp.abs(pred_U_per_atom - ref_U_per_atom) / scale_energy)
-    min_U = min(min(pred_U_per_atom), min(ref_U_per_atom)) / scale_energy
-    max_U = max(max(pred_U_per_atom), max(ref_U_per_atom)) / scale_energy
+    mae_U = onp.mean(onp.abs(pred_U - ref_U) / scale_energy)
+    rmse_U = onp.sqrt((((pred_U - ref_U) / scale_energy) ** 2).mean())
+    min_U = min(min(pred_U), min(ref_U)) / scale_energy
+    max_U = max(max(pred_U), max(ref_U)) / scale_energy
     line_U = onp.linspace(min_U, max_U)
 
     # forces
     mae_F = onp.mean(onp.abs(predictions['F'] - reference_data[
-        'F'])) / scale_energy * scale_pos
-    min_F = min(min(predictions["F"][::50].ravel()), min(reference_data["F"][::50].ravel())) / scale_energy * scale_pos
-    max_F = max(max(predictions["F"][::50].ravel()), max(reference_data["F"][::50].ravel())) / scale_energy * scale_pos
+        'F'])) / scale_force
+    rmse_F = onp.sqrt(((predictions['F'] - reference_data['F']) ** 2).mean()) / scale_force
+    min_F = min(min(predictions["F"][::50].ravel()), min(reference_data["F"][::50].ravel())) / scale_force
+    max_F = max(max(predictions["F"][::50].ravel()), max(reference_data["F"][::50].ravel())) / scale_force
     line_F = onp.linspace(min_F, max_F)
     
     # create figures
@@ -562,16 +572,16 @@ def plot_predictions(predictions, reference_data, out_dir, name):
 
     fig.suptitle("Predictions")
     
-    ax1.set_title(f"Energy (MAE: {mae_U * 1000:.1f} meV/atom)")
-    ax1.plot(ref_U_per_atom / scale_energy,
-             pred_U_per_atom / scale_energy, "*")    
+    ax1.set_title(f"Energy (MAE: {mae_U * 1000:.1f} / RMSE: {rmse_U * 1000:.1f} meV/atom)")
+    ax1.plot(ref_U / scale_energy,
+             pred_U / scale_energy, "*")    
     ax1.plot(line_U, line_U, "k--")
     ax1.set_xlabel("Ref. U [eV/atom]")
     ax1.set_ylabel("Pred. U [eV/atom]")
 
-    ax2.set_title(f"Force (MAE: {mae_F * 1000:.1f} meV/A)")
-    ax2.plot(reference_data['F'][::50].ravel() / scale_energy * scale_pos,
-             predictions['F'][::50].ravel() / scale_energy * scale_pos,
+    ax2.set_title(f"Force (MAE: {mae_F * 1000:.1f} / RMSE: {rmse_F * 1000:.1f} meV/A)")
+    ax2.plot(reference_data['F'][::50].ravel() / scale_force,
+             predictions['F'][::50].ravel() / scale_force,
              "*")
     ax2.plot(line_F, line_F, "k--")
     ax2.set_xlabel("Ref. F [eV/A]")

@@ -2,40 +2,49 @@ import warnings
 from pathlib import Path
 import uuid
 import datetime
+from functools import partial
 
+#import mlflow
 import tomli_w
 
 import numpy as onp
+from flax.core.lift import switch
 
 import functools
 
 import jax
-from jax import tree_util, random
+from jax import tree_util, lax, random, nn, experimental
 
 import jax.numpy as jnp
 
 import matplotlib.pyplot as plt
+from jax.example_libraries.optimizers import nesterov
+from jax.experimental import mesh_utils
 
-from jax_md import space
-from jax_md import simulate
+from jax_md import simulate, partition, space, util, energy, \
+    quantity as snapshot_quantity, minimize
 
-from jax_md_mod import custom_quantity, custom_simulate
-from chemtrain import quantity
+from jax_md_mod import custom_energy, custom_space, custom_quantity, custom_simulate
+from jax_md_mod.model import layers, neural_networks
 
 import optax
 
+import haiku as hk
+
+import e3nn_jax
+
 from chemtrain.trainers import ForceMatching, Difftre
 from chemtrain.ensemble import sampling
-from jax_md_mod import custom_partition
+from chemtrain import util as chem_util
+from jax_md_mod import custom_space, custom_partition
+from jax_md import energy
 
 from chemutils.models.nequip import nequip_neighborlist_pp
 from chemutils.models.mace import mace_neighborlist_pp
 from chemutils.models.allegro import allegro_neighborlist_pp
 from chemutils.models.painn import painn_neighborlist_pp
-
-# from chemutils.models import import sys
-from jax_md_mod.model import neural_networks
 from chemutils.visualize import molecule
+from cycler import cycler
 
 
 def define_model(config,
@@ -46,22 +55,17 @@ def define_model(config,
                  avg_num_neighbors=1.0,
                  positive_species=False,
                  displacement_fn=None,
-                 max_triplets=None):
+                 species=None,
+                 **kwargs):
     """Initializes a concrete model for a system given path to model parameters."""
 
     if displacement_fn is None:
-        fractional = True
-        displacement_fn, _ = space.periodic_general(
-            jnp.asarray(dataset['training']['box'][0]),
-            fractional_coordinates=fractional)
-
-#     if displacement_fn is None:
-#         print(f"Use non-periodic displacement")
-#         displacement_fn, _ = custom_space.nonperiodic_general(
-#             fractional_coordinates=False)
+        print(f"Use non-periodic displacement")
+        displacement_fn, _ = custom_space.nonperiodic_general(
+            fractional_coordinates=False)
 
     # Requirement to capture all species in the dataset
-    n_species = 2 # water with oxygens and hydrogens
+    n_species = 55
 
     model_type = config["model"].get("type", "NequIP")
     print(f"Run model {model_type}")
@@ -101,22 +105,13 @@ def define_model(config,
             mode="energy",
             **config["model"]["model_kwargs"]
         )
-    
-    elif model_type == "DimeNetPP":
-        init_fn, gnn_energy_fn = neural_networks.dimenetpp_neighborlist(
-            displacement_fn, config["model"]["r_cutoff"], n_species=n_species,
-            max_edges=max_edges, max_triplets=max_triplets,
-            n_global=1, n_local=0,
-            **config["model"]["model_kwargs"]
-        )
-
     else:
         raise NotImplementedError(f"Model {model_type} not implemented.")
 
 
     def energy_fn_template(energy_params):
         def energy_fn(pos, neighbor, mode=None, **dynamic_kwargs):
-            # assert 'species' in dynamic_kwargs.keys(), 'species not in dynamic_kwargs'
+            assert 'species' in dynamic_kwargs.keys(), 'species not in dynamic_kwargs'
 
             if "mask" not in dynamic_kwargs:
                 print(f"Add defaul all-positive mask.")
@@ -125,19 +120,9 @@ def define_model(config,
             if "box" in dynamic_kwargs:
                 print(f"Found box in energy kwargs")
 
-            if per_particle:
-                num_atoms = jnp.sum(dynamic_kwargs["mask"])
-            else:
-                num_atoms = 1.0 # return total energy
-            if config["model"]["type"] == "DimeNetPP":
-                energy = gnn_energy_fn(
-                    energy_params, pos, neighbor, **dynamic_kwargs
-                ).squeeze() # test with squeeze
-                return energy
-            else:
-                return gnn_energy_fn(
-                    energy_params, pos, neighbor, **dynamic_kwargs
-                )
+            return gnn_energy_fn(
+                energy_params, pos, neighbor, **dynamic_kwargs
+            )
 
         return energy_fn
 
@@ -146,15 +131,12 @@ def define_model(config,
 
     # Set up NN model
     r_init = jnp.asarray(dataset['R'][0])
-    # species_init = jnp.asarray(dataset['training']['species'][0])
     species_init = jnp.asarray(dataset['species'][0])
-    # species_init = jnp.zeros(dataset['training']['R'].shape[1], dtype=int)
-    box_init = jnp.asarray(dataset['box'][0])
-    # mask_init = jnp.asarray(dataset['training']['mask'][0])
+    # mask_init = jnp.asarray(dataset['mask'][0])
 
-    nbrs_init = nbrs_init.update(r_init, box=box_init) #mask=mask_init
+    nbrs_init = nbrs_init.update(r_init)
 
-    key = random.PRNGKey(11)
+    key = random.PRNGKey(config.get("seed", 0))
 
     try:
         top = molecule.topology_from_neighbor_list(nbrs_init, species_init)
@@ -166,16 +148,31 @@ def define_model(config,
 
     # Load a pretrained model
     init_params = init_fn(
-        key, r_init, nbrs_init, box=box_init, species=species_init,
-        # mask=mask_init
+        key, r_init, nbrs_init, species=species_init,
     )
 
     # print(f"Init params: {init_params}")
     print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init, species=species_init)}")
-    # print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init)}")
     # print(f"Initial forces are {jax.jit(jax.grad(energy_fn_template(init_params)))(r_init, nbrs_init, mask=mask_init, species=species_init)}")
 
     return energy_fn_template, init_params
+
+
+def init_simulator(config, shift_fn):
+    """Initializes simulator for ReSOLV"""
+    sim_settings = config["simulator_settings"]
+    simulator_template = functools.partial(
+        custom_simulate.nvt_langevin_gsd, shift_fn=shift_fn,
+        dt=sim_settings["dt"], kT=sim_settings["kT"],
+        gamma=sim_settings["gamma"]
+    )
+
+    timings = sampling.process_printouts(
+        sim_settings["dt"], sim_settings["total_time"],
+        sim_settings["t_equilib"], sim_settings["print_every"]
+    )
+
+    return simulator_template, timings
 
 
 def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, energy_fn_template, init_params, mass_repartitioning=False):
@@ -293,9 +290,21 @@ def init_optimizer(config, dataset):
     lr_schedule_fm = optax.polynomial_schedule(
         config["optimizer"]["init_lr"],
         config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
-        0.33,
+        config["optimizer"]["power"],
         transition_steps,
     )
+    # lr_schedule_fm = optax.exponential_decay(
+    #     config["optimizer"]["init_lr"],
+    #     transition_steps,
+    #     config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
+    # )
+    # lr_schedule_fm = optax.polynomial_schedule(
+    #     config["optimizer"]["init_lr"],
+    #     config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
+    #     config["optimizer"]["power"],
+    #     transition_steps,
+    # )
+
 
     if config["optimizer"]["type"] == "ADAM":
         opt_transform = optax.scale_by_adam(
@@ -330,14 +339,15 @@ def init_optimizer(config, dataset):
     return optimizer_fm
 
 
-def create_out_dir(config):
+def create_out_dir(config, tag=None, log_mlflow=False):
     now = datetime.datetime.now()
+    if tag is not None:
+        tag = f"_{tag}"
+    else:
+        tag = ""
 
     model = config["model"].get("type", "NequIP")
-    tag = config["tag"]
-    if tag is None:
-        tag = uuid.uuid4()
-    name = f"water_{model}_r_cutoff_{config['model']['r_cutoff']}_{now.year}_{now.month}_{now.day}_{tag}"
+    name = f"SPICE{tag}_{model}_{now.year}_{now.month}_{now.day}_{uuid.uuid4()}"
 
     out_dir = Path("output") / name
     out_dir.mkdir(exist_ok=False, parents=True)
@@ -346,10 +356,17 @@ def create_out_dir(config):
     with open(out_dir / "config.toml", "wb") as f:
         tomli_w.dump(config, f)
 
-    return out_dir
+    if not log_mlflow: return out_dir
+
+    client = mlflow.MlflowClient()
+    model = client.create_registered_model(name)
+    model_version = client.create_model_version(name, source="")
+    run_id = model_version.run_id
+
+    return out_dir, run_id
 
 
-def save_training_results(config, out_dir, trainer: ForceMatching):
+def save_training_results(config, out_dir, trainer: ForceMatching, run_id=None):
     # Save the config values
     with open(out_dir / "config.toml", "wb") as f:
         tomli_w.dump(config, f)
@@ -358,6 +375,18 @@ def save_training_results(config, out_dir, trainer: ForceMatching):
     trainer.save_energy_params(out_dir / "best_params.pkl", ".pkl", best=True)
     trainer.save_energy_params(out_dir / "final_params.pkl", ".pkl", best=False)
     trainer.save_trainer(out_dir / "trainer.pkl", ".pkl")
+
+    if run_id is None: return
+
+    try:
+        mlflow.log_artifact(out_dir / "training.log", "", run_id)
+        mlflow.log_artifact(out_dir / "trainer.pkl", "", run_id)
+        mlflow.log_artifact(out_dir / "best_params.pkl", "", run_id)
+        mlflow.log_artifact(out_dir / "final_params.pkl", "", run_id)
+        mlflow.log_dict(config, "", run_id)
+    except Exception:
+        print(f"Could not connect to MLFlow server.")
+
 
 
 def save_resolv_training(config, out_dir, trainer: Difftre):
@@ -370,7 +399,7 @@ def save_resolv_training(config, out_dir, trainer: Difftre):
     trainer.save_trainer(out_dir / "trainer.pkl", ".pkl")
 
 
-def save_predictions(out_dir, name, predictions):
+def save_predictions(out_dir, name, predictions, run_id=None):
     predictions = tree_util.tree_map(
         onp.asarray, predictions
     )
@@ -378,7 +407,7 @@ def save_predictions(out_dir, name, predictions):
     onp.savez(out_dir / f"{name}.npz", **predictions)
 
 
-def plot_convergence(trainer, out_dir):
+def plot_convergence(trainer, out_dir, run_id=None):
     fig, ax1 = plt.subplots(1, 1, figsize=(5, 5),
                                         layout="constrained")
 
@@ -390,6 +419,13 @@ def plot_convergence(trainer, out_dir):
     ax1.legend()
 
     fig.savefig(out_dir / f"convergence.pdf", bbox_inches="tight")
+
+    if run_id is None: return
+
+    try:
+        mlflow.log_artifact(out_dir / "convergence.pdf", "", run_id)
+    except:
+        print(f"Could not connect to MLFlow server.")
 
 
 def plot_resolv_convergence(trainer: Difftre, out_dir):
@@ -436,6 +472,7 @@ class ConnectivityChecker:
 
     def __init__(self):
         self.trainer_state = None
+        self.trajectory_states = None
 
     @property
     def prepare_task(self):
@@ -451,44 +488,35 @@ class ConnectivityChecker:
 
     def _prepare_task(self, trainer: Difftre, *args, **kwargs):
         self.trainer_state = trainer.state
+        self.trajectory_states = trainer.traj_states
 
     def _check_task(self, trainer: Difftre, batch, *args, **kwargs):
-        broken_molecules = False
-        for sim_key in batch:
-            try:
-                last_neighbor_list = trainer.trajectory_states[sim_key].sim_state.nbrs
-                last_position = trainer.trajectory_states[sim_key].sim_state.sim_state.position
-            except AttributeError:
-                *_, ref_state = trainer.trajectory_states[sim_key].args
-                last_neighbor_list = ref_state.nbrs
-                last_position = ref_state.sim_state.position
+        trajstates = chem_util.tree_take(trainer.traj_states, batch, on_cpu=False)
+        statepoints = chem_util.tree_take(trainer.statepoints, batch, on_cpu=False)
 
-            mask = trainer.state_dicts[sim_key]["mask"]
-            is_connected = custom_partition.check_connectivity(
-                last_neighbor_list, mask
-            )
-            if not is_connected:
-                print(f"[Validation] Neighbor list of statepoint {sim_key} is ->not<- connected.")
-                broken_molecules = True
-                warnings.warn(f"Neighbor list for {sim_key} is not connected.")
-            else:
-                print(f"[Validation] Neighbor list of statepoint {sim_key} is connected.")
+        @jax.jit
+        @jax.vmap
+        def _not_connected(trajstate, statepoint):
+            last_neighbor_list = trajstate.sim_state.nbrs
+            mask = statepoint["mask"]
+            return ~custom_partition.check_connectivity(last_neighbor_list, mask)
 
-            # top = molecule.topology_from_neighbor_list(last_neighbor_list, mask)
-            # fig = molecule.plot_molecule(init_pos, top)
-            # fig.savefig(out_dir / f"molecule_{sim_key}.pdf", bbox_inches="tight")
-            # plt.close(fig)
-
-        if broken_molecules:
+        if onp.any(_not_connected(trajstates, statepoints)):
             warnings.warn(
                 f"Broken molecules detected during validation. "
                 f"Reverting last update."
             )
-            trainer.state = self.trainer_state
 
-"""
-def plot_predictions_spice(predictions, reference_data, out_dir, name):
-    scale_energy = 96.4853722 # [eV] -> [kJ/mol]
+            # Revert the optimizer update and the broken simulations
+            trainer.state = self.trainer_state
+            trainer.traj_states = self.trajectory_states
+        else:
+            print(f"[Connectivity Checker] No broken molecules detected.")
+
+
+def plot_predictions(predictions, reference_data, subsets, out_dir, name, run_id=None):
+    # Simplifies comparison to reported values
+    scale_energy = 96.485  # [eV] -> [kJ/mol]
     scale_pos = 0.1  # [Å] -> [nm]
 
     cmap = plt.get_cmap('tab20')
@@ -500,6 +528,7 @@ def plot_predictions_spice(predictions, reference_data, out_dir, name):
     ref_u_per_a = reference_data['U'] / onp.sum(reference_data['mask'], axis=1) / scale_energy
 
     mae = onp.mean(onp.abs(pred_u_per_a - ref_u_per_a))
+    print(f'Energy MEA: {mae * 1000:.1f} meV/atom')
     ax1.set_title(f"Energy (MAE: {mae * 1000:.1f} meV/atom)")
     ax1.set_prop_cycle(cycler(color=plt.get_cmap('tab20c').colors))
     for subset, label in subsets.items():
@@ -516,6 +545,7 @@ def plot_predictions_spice(predictions, reference_data, out_dir, name):
 
     mae = onp.mean(onp.abs(pred_F - ref_F))
     ax2.set_title(f"Force (MAE: {mae * 1000:.1f} meV/A)")
+    print(f'Force MEA: {mae * 1000:.1f} meV/A')
     ax2.set_prop_cycle(cycler(color=plt.get_cmap('tab20c').colors))
     for subset, label in subsets.items():
         mask = subs == subset
@@ -524,57 +554,8 @@ def plot_predictions_spice(predictions, reference_data, out_dir, name):
     ax2.set_ylabel("Pred. F [eV/A]")
     ax2.legend(loc="lower right", prop={'size': 5})
 
-
     fig.savefig(out_dir / f"{name}.tiff", bbox_inches="tight")
-"""
 
+    if run_id is None: return
 
-def plot_predictions(predictions, reference_data, out_dir, name):
-    
-    # scaling factor to account for unit conversions
-    scale_energy = 96.4853722 # [eV] -> [kJ/mol]
-    scale_pos = 0.1  # [Å] -> [nm]
-    
-    # NOTE: predictions are of total energy and require scaling
-    # reference data is already in per-atom energy
-    # num_atoms = onp.sum(reference_data["mask"], axis=1)
-    num_atoms = reference_data["F"].shape[1]
-    print(f"Number of atoms: {num_atoms}")
-    pred_U_per_atom = predictions["U"] / num_atoms
-    ref_U_per_atom = reference_data["U"] / num_atoms # not sure if I should compare num_atoms
-
-    # energies
-    mae_U = onp.mean(onp.abs(pred_U_per_atom - ref_U_per_atom) / scale_energy)
-    min_U = min(min(pred_U_per_atom), min(ref_U_per_atom)) / scale_energy
-    max_U = max(max(pred_U_per_atom), max(ref_U_per_atom)) / scale_energy
-    line_U = onp.linspace(min_U, max_U)
-
-    # forces
-    mae_F = onp.mean(onp.abs(predictions['F'] - reference_data[
-        'F'])) / scale_energy * scale_pos
-    min_F = min(min(predictions["F"][::50].ravel()), min(reference_data["F"][::50].ravel())) / scale_energy * scale_pos
-    max_F = max(max(predictions["F"][::50].ravel()), max(reference_data["F"][::50].ravel())) / scale_energy * scale_pos
-    line_F = onp.linspace(min_F, max_F)
-    
-    # create figures
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5),
-                                        layout="constrained")
-
-    fig.suptitle("Predictions")
-    
-    ax1.set_title(f"Energy (MAE: {mae_U * 1000:.1f} meV/atom)")
-    ax1.plot(ref_U_per_atom / scale_energy,
-             pred_U_per_atom / scale_energy, "*")    
-    ax1.plot(line_U, line_U, "k--")
-    ax1.set_xlabel("Ref. U [eV/atom]")
-    ax1.set_ylabel("Pred. U [eV/atom]")
-
-    ax2.set_title(f"Force (MAE: {mae_F * 1000:.1f} meV/A)")
-    ax2.plot(reference_data['F'][::50].ravel() / scale_energy * scale_pos,
-             predictions['F'][::50].ravel() / scale_energy * scale_pos,
-             "*")
-    ax2.plot(line_F, line_F, "k--")
-    ax2.set_xlabel("Ref. F [eV/A]")
-    ax2.set_ylabel("Pred. F [eV/A]")
-
-    fig.savefig(out_dir / f"{name}.pdf", bbox_inches="tight")
+    mlflow.log_artifact(out_dir / f"{name}.tiff", f"", run_id)
