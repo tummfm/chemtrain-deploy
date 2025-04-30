@@ -16,6 +16,12 @@ variable Neq    equal 100 # Number of steps to equilibrate system and adjust buf
 variable Nprod  equal 250 # Number of steps to run to obtain timing
 variable Teq    equal 1000 # System temperature in K
 
+# Scale the number of reps by the number of GPUs
+variable scale equal (v_procs^(1/3))
+variable NDrep equal "floor(v_Nrep * v_scale)"
+
+print "Scale reps from ${Nrep} by ${scale} to ${NDrep}."
+
 # Neighbor list settings
 variable skind equal 2.0 # Neighbor list shell size
 
@@ -29,7 +35,7 @@ newton		    on
 
 # Define the initial lattice and geometry
 lattice         fcc 4.05 # Al
-region          box block 0 ${Nrep} 0 ${Nrep} 0 ${Nrep} 
+region          box block 0 ${NDrep} 0 ${NDrep} 0 ${NDrep}
 create_box      1 box
 create_atoms    1 box
 
