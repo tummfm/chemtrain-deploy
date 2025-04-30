@@ -1,0 +1,73 @@
+# LAMMPS input script for solidification of aluminum
+#
+# Input variables:
+#   - Nrep: Number of unit cell repetitions in each direction
+#   - model: Path to the model file
+#   - commdist: Communication distance required by model
+#   - skind: Skin distance for neighbor list
+#   - logfile: Path to the log file with benchmark results
+#
+# Output:
+#   - Log file with simulation results
+
+# Set variables for simulation
+variable dt     equal 0.003 # Time step size in fs
+variable Neq    equal 100 # Number of steps to equilibrate system and adjust buffers
+variable Nprod  equal 250 # Number of steps to run to obtain timing
+variable Teq    equal 1000 # System temperature in K
+
+# Neighbor list settings
+variable skind equal 2.0 # Neighbor list shell size
+
+# Set up basics
+units           metal
+atom_style      atomic
+boundary        p p p
+
+# Newton setting changes required communication distance 
+newton		    on
+
+# Define the initial lattice and geometry
+lattice         fcc 4.05 # Al
+region          box block 0 ${Nrep} 0 ${Nrep} 0 ${Nrep} 
+create_box      1 box
+create_atoms    1 box
+
+mass            1 26.981539 # Al
+
+# Define potentials
+pair_style	    chemtrain_deploy cuda12 0.95
+pair_coeff	    * * ${model} 1.1 1.1
+
+# Set neighbor communication
+neighbor 	    ${skind} bin
+neigh_modify	delay 0 every 1 check yes
+
+comm_modify     mode single cutoff $(v_commdist + v_skind)
+
+#-------------	Equilibration -------------#
+# Run simulation to adjust buffers and equilibrate system
+
+# Setup thermodynamic and simulation parameters
+timestep	    ${dt}
+thermo		    100
+thermo_style    custom step temp pe etotal press
+thermo_modify   flush yes
+
+# Equilibrate at high temperature to melt the structure
+velocity        all create ${Teq} 12345 mom yes rot yes dist gaussian
+fix             1 all nvt temp ${Teq} ${Teq} 1.1
+
+run             ${Neq}
+
+#-------------	Production -------------#
+# Run and time the actual production simulation
+
+# Output only solidification data
+timer loop
+log             ${logfile}
+print           "Starting production run for ${name} on ${D} GPUs."
+
+run             ${Nprod}
+
+# End of script
