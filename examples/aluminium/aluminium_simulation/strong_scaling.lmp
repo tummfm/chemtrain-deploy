@@ -28,7 +28,7 @@ boundary        p p p
 newton		    on
 
 # Define the initial lattice and geometry
-lattice         fcc 4.05 # Al
+lattice         fcc 4.065 # Al
 region          box block 0 ${Nrep} 0 ${Nrep} 0 ${Nrep} 
 create_box      1 box
 create_atoms    1 box
@@ -36,7 +36,7 @@ create_atoms    1 box
 mass            1 26.981539 # Al
 
 # Define potentials
-pair_style	    chemtrain_deploy cuda12 0.95
+pair_style	    jaxnn cuda12 0.95
 pair_coeff	    * * ${model} 1.1 1.1
 
 # Set neighbor communication

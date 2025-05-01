@@ -6,8 +6,10 @@ D=$OMPI_COMM_WORLD_SIZE
 # For weak scaling, adjust the number of reps accordingly
 if [ "$1" == "strong" ]; then
   script="strong_scaling.lmp"
+  logg="strong"
 elif [ "$1" == "weak" ]; then
   script="weak_scaling.lmp"
+  logg="weak"
 else
   echo "Invalid mode. Please set mode to either 'strong' or 'weak'."
   exit 1
@@ -15,17 +17,25 @@ fi
 
 if [ "$2" == "mace" ]; then
   model="mace"
-  reps=10 # Maximum number of repetitions in each dimension
-  commdist=10.0 # Communication distance required by mace model
+  reps=33
+  commdist=10.0
+elif [ "$2" == "allegro" ]; then
+  model="allegro"
+  reps=47
+  commdist=5.0
+elif [ "$2" == "painn" ]; then
+  model="painn"
+  reps=37
+  commdist=20.0
 else
-  echo "Invalid model. Please set model to either 'mace' or 'comming soon'."
+  echo "Invalid model. Please set model to either 'mace/allergo/painn' or 'comming soon'."
   exit 1
 fi
 
 lmp -in $script \
     -v name $model \
     -v procs $D \
-    -v model ../models/${model}.ptb \
+    -v model ./models/${model}.ptb \
     -v Nrep $reps \
     -v commdist $commdist \
-    -v logfile "output/strong_scaling_${model}_${D}_gpus.log"
+    -v logfile "output/${logg}_scaling_${model}_${D}_gpus.log"
