@@ -2,8 +2,8 @@
 
 variable Teq equal 293.15 # temperature in Kelvin
 variable dt equal 0.001 # time step size in fs
-variable Neq equal 10 # Number of steps tp equilibrate system
-variable Nprod equal 25 # Number of steps to run to obtain timing
+variable Neq equal 100 # Number of steps tp equilibrate system
+variable Nprod equal 250 # Number of steps to run to obtain timing
 
 # Neighbor list settings
 variable skind equal 2.5 # Neighbor list shell size
