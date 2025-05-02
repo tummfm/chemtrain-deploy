@@ -1,0 +1,47 @@
+# This LAMMPS input script simulates surface tension measurement of water
+
+variable T equal 293.15 # temperature in Kelvin
+variable A2m equal 1e-10 # Angstrom to meter
+variable bars2Pa equal 100000 # Atmosphere to Pascal change to bars2Pa
+variable N2mN equal 1e3 # Newton to milliNewton
+
+boundary p p p
+units metal
+atom_style atomic
+
+newton on
+
+pair_style jaxnn cuda12 0.99
+pair_modify shift yes mix arithmetic
+
+read_data final_config_filtered_648_atoms.data
+replicate 4 4 4
+change_box all z final -100 100
+
+mass 1 15.9994 # oxygen
+mass 2 1.008 # hydrogen
+
+pair_coeff * * model_default.ptb 1.1 1.1
+
+neighbor 2.5 bin
+neigh_modify every 10 delay 0 check yes
+
+comm_modify mode single cutoff 12.5
+
+# dynamics
+velocity all create ${T} 4928459 mom yes rot yes dist gaussian 
+fix mynve all nve
+fix myber all temp/berendsen ${T} ${T} 100.
+# fix myber all langevin ${T} ${T} 100. 482793
+timestep 0.001
+
+# output and run
+# first : equilibrate the system at temperature T
+# thermo 1000
+# run 10000
+
+dump mydmp all atom 10 dump.lammpstrj
+
+# longer run for surface tension measurement
+thermo 100
+run 2000
