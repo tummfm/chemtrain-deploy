@@ -1,0 +1,63 @@
+# This LAMMPS input script simulates surface tension measurement of water
+
+variable Teq equal 293.15 # temperature in Kelvin
+variable dt equal 0.1 # time step size in ps
+variable Neq equal 100 # Number of steps tp equilibrate system
+variable Nprod equal 250 # Number of steps to run to obtain timing
+
+# Neighbor list settings
+variable skind equal 2.5 # Neighbor list shell size
+
+dimension 3
+boundary p p p
+units real
+atom_style atomic
+
+newton on
+
+pair_style jaxnn cuda12 0.95
+pair_modify shift yes mix arithmetic
+
+read_data chignolin_solvated_2.lmpdat
+replicate ${Nrep} ${Nrep} ${Nrep}
+
+mass 		1 1.008
+mass        	2  1.0
+mass        	3  6.941
+mass        	4  1.0
+mass        	5 10.81
+mass 		6 12.011
+mass 		7 14.0067
+mass 		8 15.999
+
+pair_coeff	    * * ${model} 1.1 1.1
+
+neighbor 	    ${skind} bin
+neigh_modify	delay 0 every 10 check yes
+
+comm_modify     mode single cutoff $(v_commdist + v_skind)
+
+#-------------	Equilibration -------------#
+# Run simulation to adjust buffers and equilibrate system
+
+# Setup thermodynamic and simulation parameters
+timestep	    ${dt}
+thermo		    100
+thermo_style    custom step temp pe etotal press
+thermo_modify   flush yes
+
+velocity all create ${Teq} 4928459 mom yes rot yes dist gaussian
+fix             1 all nvt temp ${Teq} ${Teq} 1.1
+run             ${Neq}
+
+#-------------	Production -------------#
+# Run and time the actual production simulation
+
+# Output only solidification data
+timer loop
+log             ${logfile}
+print           "Starting production run for ${name} on ${procs} GPUs."
+
+run             ${Nprod}
+
+# End of script
