@@ -17,7 +17,7 @@ fi
 
 if [ "$2" == "mace" ]; then
   model="mace"
-  reps=12
+  reps=10
   commdist=10.0
 elif [ "$2" == "allegro" ]; then
   model="allegro"

@@ -17,15 +17,15 @@ fi
 
 if [ "$2" == "mace" ]; then
   model="mace"
-  reps=33
+  reps=30
   commdist=10.0
 elif [ "$2" == "allegro" ]; then
   model="allegro"
-  reps=47
+  reps=46
   commdist=5.0
 elif [ "$2" == "painn" ]; then
   model="painn"
-  reps=37
+  reps=35
   commdist=20.0
 else
   echo "Invalid model. Please set model to either 'mace/allergo/painn' or 'comming soon'."

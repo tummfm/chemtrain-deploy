@@ -36,7 +36,7 @@ create_atoms    1 box
 mass            1 26.981539 # Al
 
 # Define potentials
-pair_style	    jaxnn cuda12 0.95
+pair_style	    jaxnn cuda12 0.99
 pair_coeff	    * * ${model} 1.1 1.1
 
 # Set neighbor communication

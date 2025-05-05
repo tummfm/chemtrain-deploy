@@ -19,7 +19,7 @@ atom_style atomic
 
 newton on
 
-pair_style jaxnn cuda12 0.95
+pair_style jaxnn cuda12 0.99
 pair_modify shift yes mix arithmetic
 
 read_data chignolin_solvated_2.lmpdat
