@@ -17,7 +17,7 @@ fi
 
 if [ "$2" == "mace" ]; then
   model="mace"
-  reps=3
+  reps=2
   commdist=10.0
   min=0
 elif [ "$2" == "allegro" ]; then
@@ -27,7 +27,7 @@ elif [ "$2" == "allegro" ]; then
   min=1
 elif [ "$2" == "painn" ]; then
   model="painn"
-  reps=2
+  reps=1
   commdist=20.0
   min=0
 else

@@ -52,7 +52,7 @@ run             ${Neq}
 # Output only solidification data
 timer loop
 log             ${logfile}
-print           "Starting production run for ${name} on ${procs} GPUs."
+print           "Starting production run for ${name} on ${procs} GPUs using ${Nrep} reps."
 
 run             ${Nprod}
 
