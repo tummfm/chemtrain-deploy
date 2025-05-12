@@ -46,6 +46,10 @@ thermo		    100
 thermo_style    custom step temp pe etotal press
 thermo_modify   flush yes
 
+# Otherwise temperature explodes
+if "${model} == allegro" then &
+    minimize 1.0e-4 1.0e-6 1000 10000
+
 velocity all create ${Teq} 4928459 mom yes rot yes dist gaussian
 fix             1 all nvt temp ${Teq} ${Teq} 1.1
 run             ${Neq}
