@@ -19,14 +19,17 @@ if [ "$2" == "mace" ]; then
   model="mace"
   reps=3
   commdist=10.0
+  min=0
 elif [ "$2" == "allegro" ]; then
   model="allegro"
   reps=4
-  commdist=5.0
+  commdist=5.
+  min=1
 elif [ "$2" == "painn" ]; then
   model="painn"
   reps=2
   commdist=20.0
+  min=0
 else
   echo "Invalid model. Please set model to either 'mace/allergo/painn' or 'comming soon'."
   exit 1
@@ -35,6 +38,7 @@ fi
 lmp -in $script \
     -v name $model \
     -v procs $D \
+    -v minimize $min \
     -v model ./models/${model}.ptb \
     -v Nrep $reps \
     -v commdist $commdist \
