@@ -19,10 +19,10 @@ atom_style atomic
 
 newton on
 
-pair_style chemtrain_deploy cuda12 0.99
+pair_style chemtrain_deploy cuda12 0.95
 pair_modify shift yes mix arithmetic
 
-read_data chignolin_solvated.lmpdat
+read_data chignolin_solvated_2.2.lmpdat
 replicate ${NDrep} ${NDrep} ${NDrep}
 
 mass 		1 1.008
