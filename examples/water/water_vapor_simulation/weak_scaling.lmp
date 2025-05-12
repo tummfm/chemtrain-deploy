@@ -12,6 +12,7 @@ print "Scale reps from ${Nrep} by ${scale} to ${NDrep}."
 
 variable skind equal 2.5 # Neighbor list shell size
 
+processors * * 1
 
 boundary p p p
 units metal
@@ -19,7 +20,7 @@ atom_style atomic
 
 newton on
 
-pair_style jaxnn cuda12 0.99
+pair_style chemtrain_deploy cuda12 0.99
 pair_modify shift yes mix arithmetic
 
 read_data final_config_filtered_1125_atoms.data

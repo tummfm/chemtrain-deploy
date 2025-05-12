@@ -1,7 +1,7 @@
 # This LAMMPS input script simulates surface tension measurement of water
 
 variable Teq equal 293.15 # temperature in Kelvin
-variable dt equal 0.1 # time step size in ps
+variable dt equal 0.5 # time step size in ps
 variable Neq equal 100 # Number of steps tp equilibrate system
 variable Nprod equal 250 # Number of steps to run to obtain timing
 
@@ -15,10 +15,10 @@ atom_style atomic
 
 newton on
 
-pair_style jaxnn cuda12 0.99
+pair_style chemtrain_deploy cuda12 0.99
 pair_modify shift yes mix arithmetic
 
-read_data chignolin_solvated_2.lmpdat
+read_data chignolin_solvated.lmpdat
 replicate ${Nrep} ${Nrep} ${Nrep}
 
 mass 		1 1.008
