@@ -15,7 +15,7 @@ atom_style atomic
 
 newton on
 
-pair_style chemtrain_deploy cuda12 0.99
+pair_style chemtrain_deploy cuda12 0.95
 pair_modify shift yes mix arithmetic
 
 read_data chignolin_solvated.lmpdat
@@ -48,7 +48,7 @@ thermo_modify   flush yes
 
 # Otherwise temperature explodes
 if "${model} == allegro" then &
-    minimize 1.0e-4 1.0e-6 1000 10000
+    "minimize 1.0e-4 1.0e-6 1000 10000"
 
 velocity all create ${Teq} 4928459 mom yes rot yes dist gaussian
 fix             1 all nvt temp ${Teq} ${Teq} 1.1
