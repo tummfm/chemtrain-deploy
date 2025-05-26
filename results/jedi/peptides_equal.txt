@@ -1,0 +1,9 @@
+# No. GPUs  ;  Allegro;    MACE; PaiNN in katom-steps/s
+           1;      nan;     nan; nan; 23.1; 1197756
+           2;      nan;     nan; nan; 23.1; 1197756
+           4;      nan;     nan; nan; 23.1; 1197756
+           8;      nan;     nan; nan; 23.1; 1197756
+          16;      nan;    2386; nan; 23.1; 1197756
+          32;     2278;    4318; nan; 23.1; 1197756
+          64;     4556;    7545; nan; 23.1; 1197756
+# Box size is 3.3nm, reps are 7

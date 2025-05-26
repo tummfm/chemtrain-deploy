@@ -15,7 +15,16 @@ else
   exit 1
 fi
 
-if [ "$2" == "mace" ]; then
+if [ "$2" == "meam" ]; then
+  model="meam"
+  reps=46
+  commdist=5.0
+  if [ "$1" == "strong" ]; then
+    script="strong_scaling_meam.lmp"
+  else
+    script="weak_scaling_meam.lmp"
+  fi
+elif [ "$2" == "mace" ]; then
   model="mace"
   reps=30
   commdist=10.0
