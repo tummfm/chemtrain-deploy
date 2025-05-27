@@ -129,9 +129,9 @@ def define_model(config,
     # species_init = jnp.asarray(dataset['training']['species'][0])
     species_init = jnp.zeros(dataset['R'].shape[1], dtype=int)
     box_init = jnp.asarray(dataset['box'][0])
-    mask_init = jnp.asarray(dataset['mask'][0])
+    # mask_init = jnp.asarray(dataset['mask'][0])
 
-    nbrs_init = nbrs_init.update(r_init, box=box_init, mask=mask_init)
+    nbrs_init = nbrs_init.update(r_init, box=box_init)
 
     key = random.PRNGKey(11)
 
@@ -145,12 +145,11 @@ def define_model(config,
 
     # Load a pretrained model
     init_params = init_fn(
-        key, r_init, nbrs_init, box=box_init, species=species_init,
-        mask=mask_init
+        key, r_init, nbrs_init, box=box_init, species=species_init
     )
 
     # print(f"Init params: {init_params}")
-    print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init, mask=mask_init, species=species_init)}")
+    print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init, species=species_init)}")
     # print(f"Initial forces are {jax.jit(jax.grad(energy_fn_template(init_params)))(r_init, nbrs_init, mask=mask_init, species=species_init)}")
 
     return energy_fn_template, init_params
