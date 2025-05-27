@@ -297,7 +297,7 @@ def init_optimizer(config, dataset):
     lr_schedule_fm = optax.exponential_decay(
         config["optimizer"]["init_lr"],
         transition_steps,
-        config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
+        config["optimizer"]["lr_decay"],
     )
     # lr_schedule_fm = optax.polynomial_schedule(
     #     config["optimizer"]["init_lr"],
