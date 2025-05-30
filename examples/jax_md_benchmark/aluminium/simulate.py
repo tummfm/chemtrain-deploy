@@ -16,6 +16,7 @@ import jax
 
 import jax
 from chemtrain import quantity
+from jax import default_device
 
 from jax_md import partition, space, simulate
 from jax import random
@@ -38,78 +39,75 @@ def get_default_config():
     print(f"Run on device {args.device}")
     return OrderedDict(
         model=OrderedDict(
-            r_cutoff=0.50, # dimenet train 0.25
-            edge_multiplier=1.05,
+            r_cutoff=0.5,
+            edge_multiplier=1.1,
             # type="Allegro",
             # model_kwargs=OrderedDict(
             #     hidden_irreps="32x0e + 16x1e + 16x1o + 8x2e + 8x2o",
-            #     max_ell=3, # original 2
-            #     num_layers=2, # original 1
-            #     mlp_n_hidden=64,
-            #     embed_n_hidden=(8, 16, 32),
+            #     max_ell=3,
+            #     num_layers=1, # change it to 1
+            #     mlp_n_hidden=64, # double the sizes of mlp_n_hidden
+            #     embed_n_hidden=(16, 32, 64),
             # ),
-            type="MACE",
-            model_kwargs=OrderedDict(
-                hidden_irreps="32x0e + 32x1o",
-                embed_dim=64,
-                readout_mlp_irreps="16x0e",
-                max_ell=2,
-                num_interactions=2,
-                correlation=3,
-            ),
-            # type="PaiNN",
+            # type="MACE",
             # model_kwargs=OrderedDict(
-            #     # hidden_size=128,
-            #     hidden_size=192,
-            #     n_layers=4,
+            #     hidden_irreps="32x0e + 32x1o",
+            #     embed_dim=64,
+            #     readout_mlp_irreps="64x0e",
+            #     max_ell=2,
+            #     num_interactions=2,
+            #     correlation=3,
             # ),
-        ),
-        gammas=OrderedDict(
-            U=1e-6,
-            F=1e-2,
+            type="PaiNN",
+            model_kwargs=OrderedDict(
+                # hidden_size=256, 
+                hidden_size=64,
+                n_layers=2,
+            ),
         ),
         simulator=OrderedDict(
-            dt=0.001,
-            T=300,
-            dr_threshold=0.25,
+            dt=0.003,
+            T=1000,
+            dr_threshold=0,
             steps_to_printout=1, # original 1000
-            printout_steps=100,
+            printout_steps=250,
         ),
     )
 
 
-def init_count_edges_fn(displacement_fn, r_cutoff):
-    metric = jax.vmap(space.metric(displacement_fn))
+# def init_count_edges_fn(displacement_fn, r_cutoff):
+#     metric = jax.vmap(space.metric(displacement_fn))
 
-    def count(position, neighbor):
-        senders, receivers = neighbor.idx
-        dists = metric(position[senders], position[receivers])
-        return jnp.sum(dists < r_cutoff)
+#     def count(position, neighbor):
+#         senders, receivers = neighbor.idx
+#         dists = metric(position[senders], position[receivers])
+#         return jnp.sum(dists < r_cutoff)
 
-    return count
-
-def init_simulator(step_fn, count_edges_fn, neighbor_fn: partition.NeighborListFns, steps_to_printout, printout_steps, state_kwargs):
+#     return count
+def init_simulator(step_fn, neighbor_fn: partition.NeighborListFns, steps_to_printout, printout_steps, state_kwargs):
 
     def run_step(state, _):
         sim_state, nbrs = state
         nbrs = neighbor_fn.update(sim_state.position, neighbors=nbrs)
         sim_state = step_fn(sim_state, neighbor=nbrs, **state_kwargs)
 
+        overflowed = nbrs.did_buffer_overflow
+
         # Count number of valid edges
 
-        return (sim_state, nbrs), count_edges_fn(sim_state.position, nbrs)
+        return (sim_state, nbrs), overflowed
 
     def run_printout(state, _):
-        state, edges = jax.lax.scan(run_step, state, jnp.arange(steps_to_printout))
-        sim_state, _ = state
+        state, overflow_flags = jax.lax.scan(run_step, state, jnp.arange(steps_to_printout))
+        # sim_state, _ = state
 
-        return state, (sim_state, jnp.max(edges))
+        return state, overflow_flags
 
     @jax.jit
     def run(state):
-        state, (traj, edges) = jax.lax.scan(run_printout, state, jnp.arange(printout_steps))
+        state, overflow_summary = jax.lax.scan(run_printout, state, jnp.arange(printout_steps))
 
-        return state, traj, jnp.max(edges)
+        return state, overflow_summary
 
     return run
 
@@ -118,10 +116,9 @@ def main():
     key = random.PRNGKey(0)
     key, split = random.split(key)
     config = get_default_config()
-
-    atoms = read_lammps_data("initial_config.data",
+    atoms = read_lammps_data(f"replicated_initial_config_{config['model']['type'].lower()}.data",
                              style='atomic')
-
+    
     positions = atoms.get_positions() / 10  # convert to nm
     box = atoms.cell
     species = atoms.get_atomic_numbers()
@@ -134,41 +131,41 @@ def main():
 
     init_sample = {
         "R": R,
-        "box": box_lengths,
+        "box": jnp.diag(box_lengths),
         "species": species,
         "mass": masses,
     }
-
+    # print(f"Initial sample: {init_sample['R'].shape}")
     dataset = {key: jnp.expand_dims(value, axis=0) for key, value in init_sample.items()}
 
     displacement_fn, shift_fn = space.periodic_general(
         box_lengths, fractional_coordinates=True)
 
-    _, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
-        dataset, displacement_fn, None, config["model"]["r_cutoff"], box_key="box", mask_key=None,
-        format=partition.Sparse, capacity_multiplier=config["model"]["edge_multiplier"],
-    )
+    # _, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
+    #     dataset, displacement_fn, None, config["model"]["r_cutoff"], box_key="box", mask_key=None,
+    #     format=partition.Sparse, capacity_multiplier=config["model"]["edge_multiplier"],
+    # )
+    # max_edges = int(max_edges * config["model"]["edge_multiplier"])
 
+    # print(f"Max neighbors: {max_neighbors}, max edges: {max_edges}, avg num neighbors: {avg_num_neighbors}")
+    # check if 
     neighbor_fn = partition.neighbor_list(
         displacement_fn, init_sample["box"], config["model"]["r_cutoff"], dr_threshold=config["simulator"]["dr_threshold"], # TODO: Set threshold with config file
         disable_cell_list=False, fractional_coordinates=True,
-        format=partition.Sparse,
+        format=partition.Sparse, capacity_multiplier=config["model"]["edge_multiplier"],
     )
 
-    max_edges = int(max_edges * config["model"]["edge_multiplier"])
+    # max_edges = int(max_edges * config["model"]["edge_multiplier"])
     nbrs_init = neighbor_fn.allocate(init_sample["R"], capacity_multiplier=config["model"]["edge_multiplier"])
 
-    print(f"Neighbors: {nbrs_init}")
-    print(f"Max neighbors: {max_neighbors}, max edges: {max_edges}")
 
     # Positive species not required -> check again
     energy_fn_template, init_params = train_utils.define_model(
-        config, dataset, nbrs_init, max_edges, per_particle=False, # per_particle=False for trainig
-        avg_num_neighbors=avg_num_neighbors, positive_species=False,
+        config, dataset, nbrs_init, nbrs_init.idx.shape[1], per_particle=False, positive_species=False,
         displacement_fn=displacement_fn
     )
     energy_params = onp.load(
-        "best_params.pkl",
+        f"best_params_{config['model']['type'].lower()}.pkl",
         allow_pickle=True,
     )
 
@@ -179,7 +176,7 @@ def main():
 
     # TODO: Initialize the simulator from above
 
-    count_edge_fn = init_count_edges_fn(displacement_fn, config["model"]["r_cutoff"])
+    # count_edge_fn = init_count_edges_fn(displacement_fn, config["model"]["r_cutoff"])
 
 
     init_fn, step_fn = simulate.nvt_nose_hoover(
@@ -189,7 +186,7 @@ def main():
         kT=config["simulator"]["T"] * quantity.kb,
     ) # TODO: Initialize
     
-    simulator_fn = init_simulator(step_fn, count_edge_fn, neighbor_fn, config["simulator"]["steps_to_printout"], 
+    simulator_fn = init_simulator(step_fn, neighbor_fn, config["simulator"]["steps_to_printout"], 
                                   config["simulator"]["printout_steps"], state_kwargs={"species": init_sample["species"]}) # TODO: Set timings
 
 
@@ -198,15 +195,15 @@ def main():
     )
 
     t_start = time.time()
-    (_, final_nbrs), traj, sim_max_edges = simulator_fn(init_state)
+    (_, final_nbrs), _ = simulator_fn(init_state)
     t_end = time.time() - t_start
     print(f"Simulation time: {t_end / 60} min")
 
     print(f"Final neighbor list: {final_nbrs.error}")
 
     # TODO: Check whether simulations max edges remained below actual max edges
-    print(f"Simulation max edges: {sim_max_edges}, max edges: {max_edges}")
-    assert sim_max_edges <= max_edges, "Simulation exceeded max edges"
+    # print(f"Simulation max edges: {sim_max_edges}, max edges: {max_edges}")
+    # assert sim_max_edges <= max_edges, "Simulation exceeded max edges"
 
 if __name__ == "__main__":
     main()
