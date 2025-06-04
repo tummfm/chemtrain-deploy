@@ -9,7 +9,6 @@ if len(sys.argv) > 1:
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.95"
 
 import jax
-# jax.config.update("jax_debug_nans", True)
 
 import jax
 from chemtrain.deploy import exporter, graphs as export_graphs
@@ -47,7 +46,7 @@ def get_default_config():
     match dataset:
         case "ANI":
             scale_energy *= 27.2114079527 # Ha -> eV
-            flip_forces = True # why flip forces?
+            flip_forces = True
 
     print(f"Run on device {args.device}")
 
@@ -82,15 +81,11 @@ def get_default_config():
             ),
         ),
         optimizer=OrderedDict(
-            # init_lr=1e-3,
-            init_lr=1e-3, # painn use 1e-3, otherwise 1e-2
-            # init_lr=1e-2, # painn use 1e-4, otherwise 1e-2
+            init_lr=1e-3,
             lr_decay=1e-05,
-            # lr_decay=0.1,
             epochs=args.epochs,
             batch=args.batch,
             cache=25,
-            # weight_decay=-1e-2,
             type="ADAM",
             optimizer_kwargs=OrderedDict(
                 b1=0.9,
@@ -120,7 +115,7 @@ def main():
     config = get_default_config()
     out_dir = train_utils.create_out_dir(config)
 
-    dataset = aluminum.get_dataset("/home/weilong/workspace/chemsim-lammps/datasets", config)
+    dataset = aluminum.get_dataset("", config)
 
     displacement_fn, _ = space.periodic_general(box=dataset['training']['box'][0], fractional_coordinates=True)
 
@@ -129,13 +124,9 @@ def main():
         format=partition.Sparse,
     )
 
-    print(f"Neighbors: {nbrs_init}")
-    print(f"Max neighbors: {max_neighbors}, max edges: {max_edges}")
-
-    # Positive species not required -> check again
     energy_fn_template, init_params = train_utils.define_model(
-        config, dataset, nbrs_init, max_edges, per_particle=False, # per_particle=False for trainig
-        avg_num_neighbors=avg_num_neighbors, # , positive_species=True,
+        config, dataset, nbrs_init, max_edges, per_particle=False,
+        avg_num_neighbors=avg_num_neighbors,
         displacement_fn=displacement_fn
     )
 
@@ -151,8 +142,6 @@ def main():
         },
         log_file = out_dir / "training.log"
     )
-
-    # extensions.log_batch_progress(trainer_fm, frequency=100)
 
     trainer_fm.set_dataset(
         dataset['training'], stage='training')
@@ -174,7 +163,6 @@ def main():
     train_utils.plot_predictions(predictions, dataset["validation"], out_dir, f"preds_validation", config["processing"])
     train_utils.plot_convergence(trainer_fm, out_dir)
 
-    # Directly export the model for later use in LAMMPS
 
     displacement_fn, _ = space.free()
     nbrs_init, (max_neighbors, max_edges, avg_num_neighbors) = graphs.allocate_neighborlist(
@@ -211,14 +199,9 @@ def main():
         def energy_fn(self, position, species, graph):
 
             neighbor = graph.to_neighborlist()
-            # We trained the model with units nm and kJ/mol, so we need some scaling
-            # input in A -> model uses nm
             position /= 10.0 # A/nm
             energies = self.model(position, neighbor, species=species)
-            # model uses kJ/mol -> export in eV
-            energies /= 96.485 # (kJ/mol)/eV
-            # for export to kcal/mol
-            # energies /= 4.184 # (kJ/mol)/(kcal/mol)
+            energies /= 96.485
 
             return energies
 

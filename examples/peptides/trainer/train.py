@@ -84,7 +84,7 @@ def main():
     out_dir = train_utils.create_out_dir(config)
 
     dataset, info = spice.download_spice(
-        "/home/ga27pej/Datasets",
+        "",
         subsets=config["dataset"].get("subsets"),
         max_samples=config["dataset"].get("max_samples"),
         fractional=False

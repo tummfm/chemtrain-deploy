@@ -6,12 +6,7 @@ import argparse
 if len(sys.argv) > 1:
     os.environ["CUDA_VISIBLE_DEVICES"] = sys.argv[1]
 
-# os.environ["CUDA_VISIBLE_DEVICES"] = "1" # set your cuda device here instead od passing as argument
-
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.99"
-
-import jax
-# jax.config.update("jax_debug_nans", True)
 
 import jax
 from chemtrain.deploy import exporter, graphs as export_graphs
@@ -62,17 +57,6 @@ def get_default_config():
             #     num_interactions=2,
             #     correlation=3,
             # ),
-            # type="DimeNetPP",
-            # model_kwargs=OrderedDict(
-            #     embed_size=64, # origianl 128
-            #     n_interaction_blocks=2, # original 3
-            #     out_embed_size=192, # original 192
-            #     num_rbf=6,
-            #     num_sbf=7,
-            #     num_residual_before_skip=1,
-            #     num_residual_after_skip=2,
-            #     num_dense_out=3,
-            # ),
             # type="PaiNN",
             # model_kwargs=OrderedDict(
             #     hidden_size=128,
@@ -106,8 +90,7 @@ def main():
 
     config = get_default_config()
     out_dir = train_utils.create_out_dir(config)
-
-    dataset = water.get_dataset("/home/weilong/workspace/chemsim-lammps/datasets")
+    dataset = water.get_dataset("")
     dataset = water.get_random_subset(dataset, 1.0, seed=0)
     displacement_fn, _ = space.periodic_general(box=dataset['training']['box'][0], fractional_coordinates=True)
     if config["model"]["type"] == "DimeNetPP":
@@ -125,7 +108,6 @@ def main():
     print(f"Neighbors: {nbrs_init}")
     print(f"Max neighbors: {max_neighbors}, max edges: {max_edges}")
 
-    # Positive species not required -> check again
     if config["model"]["type"] == "DimeNetPP":
         energy_fn_template, init_params = train_utils.define_model(
             config, dataset, nbrs_init, max_edges, per_particle=False, # per_particle=False for trainig
@@ -152,7 +134,6 @@ def main():
         log_file = out_dir / "training.log"
     )
 
-    # extensions.log_batch_progress(trainer_fm, frequency=100)
 
     trainer_fm.set_dataset(
         dataset['training'], stage='training')
@@ -161,7 +142,6 @@ def main():
     trainer_fm.set_dataset(
         dataset['testing'], stage='testing', include_all=True)
 
-    # Train and save the results to a new folder
     trainer_fm.train(config["optimizer"]["epochs"])
 
     train_utils.save_training_results(config, out_dir, trainer_fm)
@@ -174,7 +154,6 @@ def main():
     train_utils.plot_predictions(predictions, dataset["validation"], out_dir, f"preds_validation")
     train_utils.plot_convergence(trainer_fm, out_dir)
 
-    # Directly export the model for later use in LAMMPS
 
     displacement_fn, _ = space.free()
     if config["model"]["type"] == "DimeNetPP":
@@ -205,9 +184,9 @@ def main():
 
     class Model(exporter.Exporter):
 
-        r_cutoff = config["model"]["r_cutoff"] * 10# Cutoff in Angstrom
-        graph_type = export_graphs.SimpleSparseNeighborList # this should also be changed
-        # nbr_order = [1+mpl,2*(1+mpl)] # this should be the changed
+        r_cutoff = config["model"]["r_cutoff"] * 10
+        graph_type = export_graphs.SimpleSparseNeighborList 
+
         if config["model"]["type"] == "MACE":
             nbr_order = [2, 4] # MACE
         if config["model"]["type"] == "Allegro":
@@ -216,7 +195,6 @@ def main():
             nbr_order = [4, 8]
         mask = False
         unit_style = "metal"
-        # num_mpl: int = num_mpl_lookup[config["model"]["type"]]
         displacement = displacement_fn
 
         def __init__(self, export_template, params, *args, **kwargs):
@@ -227,57 +205,15 @@ def main():
         def energy_fn(self, position, species, graph):
 
             neighbor = graph.to_neighborlist()
-            # We trained the model with units nm and kJ/mol, so we need some scaling
-            # input in A -> model uses nm
+
             position /= 10.0 # A/nm
             energies = self.model(position, neighbor, species=species)
-            # model uses kJ/mol -> export in eV
             energies /= 96.485 # (kJ/mol)/eV
-            # for export to kcal/mol
-            # energies /= 4.184 # (kJ/mol)/(kcal/mol)
+
 
             return energies
             
-    class Dimenet_Model(exporter.Exporter):
-
-            r_cutoff = config["model"]["r_cutoff"] * 10# Cutoff in Angstrom
-            graph_type = export_graphs.SimpleDenseNeighborList
-            nbr_order = [3, 6] # different nbr_order should be used for different MP layers
-            mask = False
-            unit_style = "metal"
-            # num_mpl: int = num_mpl_lookup[config["model"]["type"]]
-            displacement = displacement_fn
-
-            def __init__(self, params, *args, **kwargs):
-                self.params = params
-
-                super().__init__(*args, **kwargs)
-
-            def energy_fn(self, position, species, graph):
-
-                neighbor = graph.to_neighborlist()
-                _, apply_fn = neural_networks.dimenetpp_neighborlist(
-                    displacement_fn, self.r_cutoff / 10, n_species=2,
-                    max_edges=graph.max_edges.size, max_triplets=graph.max_triplets.size,
-                    n_global=0, n_local=1, **config["model"]["model_kwargs"]
-                )
-
-                # We trained the model with units nm and kJ/mol, so we need some scaling
-                # input in A -> model uses nm
-                position /= 10.0 # A/nm
-                energies = apply_fn(self.params, position, neighbor, species=species)
-                energies = energies.squeeze(axis=-1)
-                # model uses kJ/mol -> export in eV
-                energies /= 96.485 # (kJ/mol)/eV
-                # for export to kcal/mol
-                # energies /= 4.184 # (kJ/mol)/(kcal/mol)
-
-                return energies
-    if config["model"]["type"] == "DimeNetPP":
-        trained_model = Dimenet_Model(trainer_fm.best_params)
-    else:    
-        trained_model = Model(export_template, trainer_fm.best_params)
-
+    trained_model = Model(export_template, trainer_fm.best_params)
     trained_model.export()
     trained_model.save(out_dir / "model_default.ptb")
 
