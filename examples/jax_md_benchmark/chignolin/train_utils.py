@@ -21,8 +21,6 @@ import matplotlib.pyplot as plt
 from jax.example_libraries.optimizers import nesterov
 from jax.experimental import mesh_utils
 
-from jax_md import simulate, partition, space, util, energy, \
-    quantity as snapshot_quantity, minimize
 
 from jax_md_mod import custom_energy, custom_space, custom_quantity, custom_simulate
 from jax_md_mod.model import layers, neural_networks
@@ -129,10 +127,8 @@ def define_model(config,
     if dataset is None:
         return energy_fn_template
 
-    # Set up NN model
     r_init = jnp.asarray(dataset['R'][0])
     species_init = jnp.asarray(dataset['species'][0])
-    # mask_init = jnp.asarray(dataset['mask'][0])
 
     nbrs_init = nbrs_init.update(r_init)
 
@@ -146,15 +142,9 @@ def define_model(config,
     except NotImplementedError:
         print("Could not plot molecule")
 
-    # Load a pretrained model
     init_params = init_fn(
         key, r_init, nbrs_init, species=species_init,
     )
-
-    # print(f"Init params: {init_params}")
-    print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init, species=species_init)}")
-    # print(f"Initial forces are {jax.jit(jax.grad(energy_fn_template(init_params)))(r_init, nbrs_init, mask=mask_init, species=species_init)}")
-
     return energy_fn_template, init_params
 
 
@@ -195,19 +185,15 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
 
     @jax.vmap
     def _init_ref_state(split, sample):
-        # Performa mass repartitioning to hydrogen atoms
         senders, receivers = sample["bonds"]
-
         init_mass = jnp.asarray(sample["mass"])
         init_species = jnp.asarray(sample["species"])
 
-        # Edge must be valid, sender must be a heavy atom, receiver must be a light atom
         heavy_sender = (init_species[senders] > 1) & (senders < init_mass.size)
         light_receiver = (init_species[receivers] == 1) & (receivers < init_mass.size)
         send_mass = jnp.float_(heavy_sender & light_receiver)
 
         if mass_repartitioning:
-            # Mass repartitioning (1 u from heavy to light atom)
             init_mass -= mass_multiplier * jax.ops.segment_sum(send_mass, senders, init_mass.size)
             init_mass += mass_multiplier * jax.ops.segment_sum(send_mass, receivers, init_mass.size)
 
@@ -220,7 +206,6 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
             nbrs=nbrs,
         )
 
-        # Generate a reference trajectory for testing purposes
         ref_traj = gen_traj_fn(init_params, reference_state, species=init_species, mask=sample["mask"], id=sample["id"])
         quantities = sampling.quantity_traj(
             ref_traj, quantities={"nclusters": n_clusters},
@@ -241,7 +226,6 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
 
     remainder = n_samples % jax.device_count()
     if remainder > 0:
-        # Need to pad the dataset to make it divisible by the number of devices
         pad = jax.device_count() - remainder
         sharded_args = tree_util.tree_map(
             lambda x: jnp.concatenate([x, x[:pad]], axis=0), sharded_args)
@@ -262,7 +246,6 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
     print(f"Remaining IDs in the dataset: {dataset['id'][stable]}")
     print(f"Removed IDs from the dataset: {dataset['id'][~stable]}")
 
-    # Sort out all samples that broke during the initial simulation
     successful = tree_util.tree_map(
         lambda x: onp.asarray(x[stable]), (trajstates, dataset, quants)
     )
@@ -298,13 +281,6 @@ def init_optimizer(config, dataset):
     #     transition_steps,
     #     config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
     # )
-    # lr_schedule_fm = optax.polynomial_schedule(
-    #     config["optimizer"]["init_lr"],
-    #     config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
-    #     config["optimizer"]["power"],
-    #     transition_steps,
-    # )
-
 
     if config["optimizer"]["type"] == "ADAM":
         opt_transform = optax.scale_by_adam(
@@ -367,11 +343,9 @@ def create_out_dir(config, tag=None, log_mlflow=False):
 
 
 def save_training_results(config, out_dir, trainer: ForceMatching, run_id=None):
-    # Save the config values
     with open(out_dir / "config.toml", "wb") as f:
         tomli_w.dump(config, f)
 
-    # Save all the outputs
     trainer.save_energy_params(out_dir / "best_params.pkl", ".pkl", best=True)
     trainer.save_energy_params(out_dir / "final_params.pkl", ".pkl", best=False)
     trainer.save_trainer(out_dir / "trainer.pkl", ".pkl")
@@ -390,11 +364,9 @@ def save_training_results(config, out_dir, trainer: ForceMatching, run_id=None):
 
 
 def save_resolv_training(config, out_dir, trainer: Difftre):
-    # Save the config values
     with open(out_dir / "config.toml", "wb") as f:
         tomli_w.dump(config, f)
 
-    # Save all the outputs
     trainer.save_energy_params(out_dir / "final_params.pkl", ".pkl", best=False)
     trainer.save_trainer(out_dir / "trainer.pkl", ".pkl")
 

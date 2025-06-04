@@ -55,13 +55,7 @@ def define_model(config,
             jnp.asarray(dataset['training']['box'][0]),
             fractional_coordinates=fractional)
 
-#     if displacement_fn is None:
-#         print(f"Use non-periodic displacement")
-#         displacement_fn, _ = custom_space.nonperiodic_general(
-#             fractional_coordinates=False)
-
-    # Requirement to capture all species in the dataset
-    n_species = 2 # water with oxygens and hydrogens
+    n_species = 2
 
     model_type = config["model"].get("type", "NequIP")
     print(f"Run model {model_type}")
@@ -144,15 +138,11 @@ def define_model(config,
     if dataset is None:
         return energy_fn_template
 
-    # Set up NN model
     r_init = jnp.asarray(dataset['R'][0])
-    # species_init = jnp.asarray(dataset['training']['species'][0])
     species_init = jnp.asarray(dataset['species'][0])
-    # species_init = jnp.zeros(dataset['training']['R'].shape[1], dtype=int)
     box_init = jnp.asarray(dataset['box'][0])
-    # mask_init = jnp.asarray(dataset['training']['mask'][0])
 
-    nbrs_init = nbrs_init.update(r_init, box=box_init) #mask=mask_init
+    nbrs_init = nbrs_init.update(r_init, box=box_init)
 
     key = random.PRNGKey(11)
 
@@ -164,16 +154,10 @@ def define_model(config,
     except NotImplementedError:
         print("Could not plot molecule")
 
-    # Load a pretrained model
     init_params = init_fn(
         key, r_init, nbrs_init, box=box_init, species=species_init,
-        # mask=mask_init
     )
-
-    # print(f"Init params: {init_params}")
     print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init, species=species_init)}")
-    # print(f"Initial energy is {jax.jit(energy_fn_template(init_params))(r_init, nbrs_init)}")
-    # print(f"Initial forces are {jax.jit(jax.grad(energy_fn_template(init_params)))(r_init, nbrs_init, mask=mask_init, species=species_init)}")
 
     return energy_fn_template, init_params
 
@@ -198,19 +182,15 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
 
     @jax.vmap
     def _init_ref_state(split, sample):
-        # Performa mass repartitioning to hydrogen atoms
         senders, receivers = sample["bonds"]
-
         init_mass = jnp.asarray(sample["mass"])
         init_species = jnp.asarray(sample["species"])
 
-        # Edge must be valid, sender must be a heavy atom, receiver must be a light atom
         heavy_sender = (init_species[senders] > 1) & (senders < init_mass.size)
         light_receiver = (init_species[receivers] == 1) & (receivers < init_mass.size)
         send_mass = jnp.float_(heavy_sender & light_receiver)
 
         if mass_repartitioning:
-            # Mass repartitioning (1 u from heavy to light atom)
             init_mass -= mass_multiplier * jax.ops.segment_sum(send_mass, senders, init_mass.size)
             init_mass += mass_multiplier * jax.ops.segment_sum(send_mass, receivers, init_mass.size)
 
@@ -223,7 +203,6 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
             nbrs=nbrs,
         )
 
-        # Generate a reference trajectory for testing purposes
         ref_traj = gen_traj_fn(init_params, reference_state, species=init_species, mask=sample["mask"], id=sample["id"])
         quantities = sampling.quantity_traj(
             ref_traj, quantities={"nclusters": n_clusters},
@@ -244,7 +223,6 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
 
     remainder = n_samples % jax.device_count()
     if remainder > 0:
-        # Need to pad the dataset to make it divisible by the number of devices
         pad = jax.device_count() - remainder
         sharded_args = tree_util.tree_map(
             lambda x: jnp.concatenate([x, x[:pad]], axis=0), sharded_args)
@@ -254,7 +232,6 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
     trajstates, (clusters, nclusters), quants = init_ref_state(*sharded_args)
     stable = (nclusters == 1)
 
-    # Remove the padded entries
     if remainder > 0:
         pad = jax.device_count() - remainder
         trajstates, stable, quants = tree_util.tree_map(
@@ -265,7 +242,6 @@ def init_reference_state(key, simulator_template, timings, nbrs_init, dataset, e
     print(f"Remaining IDs in the dataset: {dataset['id'][stable]}")
     print(f"Removed IDs from the dataset: {dataset['id'][~stable]}")
 
-    # Sort out all samples that broke during the initial simulation
     successful = tree_util.tree_map(
         lambda x: onp.asarray(x[stable]), (trajstates, dataset, quants)
     )
@@ -293,7 +269,7 @@ def init_optimizer(config, dataset):
     lr_schedule_fm = optax.polynomial_schedule(
         config["optimizer"]["init_lr"],
         config["optimizer"]["lr_decay"] * config["optimizer"]["init_lr"],
-        0.33,
+        2.0,
         transition_steps,
     )
 
@@ -486,60 +462,12 @@ class ConnectivityChecker:
             )
             trainer.state = self.trainer_state
 
-"""
-def plot_predictions_spice(predictions, reference_data, out_dir, name):
-    scale_energy = 96.4853722 # [eV] -> [kJ/mol]
-    scale_pos = 0.1  # [Å] -> [nm]
-
-    cmap = plt.get_cmap('tab20')
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5),
-                                        layout="constrained")
-
-    fig.suptitle("Predictions")
-    pred_u_per_a = predictions['U'] / onp.sum(reference_data['mask'], axis=1) / scale_energy
-    ref_u_per_a = reference_data['U'] / onp.sum(reference_data['mask'], axis=1) / scale_energy
-
-    mae = onp.mean(onp.abs(pred_u_per_a - ref_u_per_a))
-    ax1.set_title(f"Energy (MAE: {mae * 1000:.1f} meV/atom)")
-    ax1.set_prop_cycle(cycler(color=plt.get_cmap('tab20c').colors))
-    for subset, label in subsets.items():
-        mask = reference_data['subset'] == subset
-        ax1.plot(ref_u_per_a[mask] , pred_u_per_a[mask], "*", label=label)
-    ax1.set_xlabel("Ref. U [eV/atom]")
-    ax1.set_ylabel("Pred. U [eV/atom]")
-
-    # Select only the atoms that are not masked
-    subs = onp.tile(reference_data['subset'], (1, *predictions['F'].shape[1:]))
-    subs = subs.reshape((-1, 3))[reference_data['mask'].ravel(), :]
-    pred_F = predictions['F'].reshape((-1, 3))[reference_data['mask'].ravel(), :] / scale_energy * scale_pos
-    ref_F = reference_data['F'].reshape((-1, 3))[reference_data['mask'].ravel(), :] / scale_energy * scale_pos
-
-    mae = onp.mean(onp.abs(pred_F - ref_F))
-    ax2.set_title(f"Force (MAE: {mae * 1000:.1f} meV/A)")
-    ax2.set_prop_cycle(cycler(color=plt.get_cmap('tab20c').colors))
-    for subset, label in subsets.items():
-        mask = subs == subset
-        ax2.plot(ref_F[mask].ravel(), pred_F[mask].ravel(), "*", label=label)
-    ax2.set_xlabel("Ref. F [eV/A]")
-    ax2.set_ylabel("Pred. F [eV/A]")
-    ax2.legend(loc="lower right", prop={'size': 5})
-
-
-    fig.savefig(out_dir / f"{name}.tiff", bbox_inches="tight")
-"""
-
-
 def plot_predictions(predictions, reference_data, out_dir, name):
-    
-    # scaling factor to account for unit conversions
+
     scale_energy = 96.4853722 # [eV] -> [kJ/mol]
     scale_pos = 0.1  # [Å] -> [nm]
     
-    # NOTE: predictions are of total energy and require scaling
-    # reference data is already in per-atom energy
-    # num_atoms = onp.sum(reference_data["mask"], axis=1)
     num_atoms = reference_data["F"].shape[1]
-    print(f"Number of atoms: {num_atoms}")
     pred_U_per_atom = predictions["U"] / num_atoms
     ref_U_per_atom = reference_data["U"] / num_atoms # not sure if I should compare num_atoms
 
@@ -556,7 +484,6 @@ def plot_predictions(predictions, reference_data, out_dir, name):
     max_F = max(max(predictions["F"][::50].ravel()), max(reference_data["F"][::50].ravel())) / scale_energy * scale_pos
     line_F = onp.linspace(min_F, max_F)
     
-    # create figures
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5),
                                         layout="constrained")
 
