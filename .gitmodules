@@ -1,0 +1,4 @@
+[submodule "chemtrain"]
+	path = external/chemtrain
+	url = git@github.com:tummfm/chemtrain.git
+	branch = main
