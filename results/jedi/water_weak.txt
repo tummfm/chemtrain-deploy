@@ -1,0 +1,4 @@
+# No. GPUs  ;  Allegro;    MACE; PaiNN in katom-steps/s
+           1;  840.470; 230.755; 199.644; 450000; 112500; 40500
+           4;     3259; 906.036; 793.774;    nan;    nan;   nan
+          16;    12743;    3622;    3146;    nan;    nan;   nan

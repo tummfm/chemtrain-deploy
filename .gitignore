@@ -1,0 +1,12 @@
+*.egg-info
+__pycache__
+output
+checkpoints
+*.log
+log.*
+*.ptb
+old_*
+activate_plugin
+rebuild_plugin
+datasets
+temp
