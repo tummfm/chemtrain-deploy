@@ -4,7 +4,7 @@
 
 
 This repository contains the implementation of the experiments presented in the paper:  
-[**_chemtrain-deploy: A parallel and scalable framework for machine learning potentials in million-atom MD simulations_**](https://arxiv.org/abs/2506.04055)
+[**_chemtrain-deploy: A parallel and scalable framework for machine learning potentials in million-atom MD simulations_**](https://pubs.acs.org/doi/10.1021/acs.jctc.5c00996)
 
 ![TOC figure](toc.png)  
 _Figure: Table of contents graphic from the paper._
